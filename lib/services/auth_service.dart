@@ -1,4 +1,5 @@
 import 'package:google_sign_in/google_sign_in.dart';
+import 'api_service.dart';
 
 class AppUser {
   final String id;
@@ -18,18 +19,38 @@ class AuthService {
   final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: [
       'email',
-      'https://www.googleapis.com/auth/drive.appdata', // For backup
+      'https://www.googleapis.com/auth/drive.appdata',
     ],
   );
 
-  /// Standard email/password mock login
+  /// Standard email/password login via Flask API
   Future<AppUser?> login(String username, String password) async {
-    await Future.delayed(const Duration(milliseconds: 500));
-    // In a real app, validate with backend. Here we just return a mock user.
-    if (username.isNotEmpty && password.isNotEmpty) {
-      return AppUser(id: '1', name: 'Dr. $username', email: '$username@medihive.com');
+    try {
+      final data = await ApiService.login(username, password);
+      final user = data['user'] as Map<String, dynamic>;
+      return AppUser(
+        id: user['id']?.toString() ?? '',
+        name: user['name']?.toString() ?? 'Doctor',
+        email: '${user['username']}@medihive.com',
+      );
+    } catch (e) {
+      return null;
     }
-    return null;
+  }
+
+  /// Register a new user via Flask API
+  Future<AppUser?> register(String username, String password, {String name = 'Doctor'}) async {
+    try {
+      final data = await ApiService.register(username, password, name: name);
+      final user = data['user'] as Map<String, dynamic>;
+      return AppUser(
+        id: user['id']?.toString() ?? '',
+        name: user['name']?.toString() ?? 'Doctor',
+        email: '${user['username']}@medihive.com',
+      );
+    } catch (e) {
+      return null;
+    }
   }
 
   /// Google Sign In
@@ -45,20 +66,9 @@ class AuthService {
         );
       }
     } catch (e) {
-      print('Google Sign In Error: $e');
+      // Google Sign-In not configured yet
     }
     return null;
-  }
-
-  /// Logout from Google if signed in
-  Future<void> logout() async {
-    try {
-      if (await _googleSignIn.isSignedIn()) {
-        await _googleSignIn.signOut();
-      }
-    } catch (e) {
-      print('Google Sign Out Error: $e');
-    }
   }
 
   /// Silent sign in for Google
@@ -74,8 +84,18 @@ class AuthService {
         );
       }
     } catch (e) {
-      print('Silent Sign In Error: $e');
+      // Google Sign-In not configured yet
     }
     return null;
+  }
+
+  /// Logout
+  Future<void> logout() async {
+    await ApiService.clearToken();
+    try {
+      if (await _googleSignIn.isSignedIn()) {
+        await _googleSignIn.signOut();
+      }
+    } catch (_) {}
   }
 }
