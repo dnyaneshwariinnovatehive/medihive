@@ -117,16 +117,10 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
                   },
                   child: MedicalPulse(
                     size: 200,
-                    child: Image.asset(
-                      'assets/images/logo.png',
-                      height: 200,
-                      width: 200,
-                      fit: BoxFit.contain,
-                      errorBuilder: (_, __, ___) => const Icon(
-                        Icons.medical_services_outlined,
-                        size: 80,
-                        color: AppTheme.primary,
-                      ),
+                    child: const Icon(
+                      Icons.medical_services_outlined,
+                      size: 80,
+                      color: AppTheme.primary,
                     ),
                   ),
                 ),

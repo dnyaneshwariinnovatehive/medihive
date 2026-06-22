@@ -114,7 +114,7 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
               Text('Always here to help', style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 12)),
             ]),
             Spacer(),
-            Image.asset('assets/images/logo.png', height: 60, width: 60, fit: BoxFit.contain, errorBuilder: (_, __, ___) => SizedBox.shrink()),
+            Icon(Icons.medical_services_outlined, size: 36, color: Colors.white.withValues(alpha: 0.9)),
           ]))),
       ),
       Expanded(child: ListView.builder(

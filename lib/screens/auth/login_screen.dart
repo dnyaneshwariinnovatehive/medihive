@@ -154,12 +154,10 @@ class _LoginScreenState extends State<LoginScreen>
       padding: const EdgeInsets.fromLTRB(24, 36, 24, 28),
       child: Column(
         children: [
-          Image.asset(
-            'assets/images/logo.png',
-            width: 150,
-            height: 150,
-            fit: BoxFit.contain,
-            errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+          Icon(
+            Icons.medical_services_outlined,
+            size: 80,
+            color: Colors.white.withValues(alpha: 0.9),
           ),
           const SizedBox(height: 12),
           Text(
