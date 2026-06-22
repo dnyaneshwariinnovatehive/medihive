@@ -4,7 +4,6 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
 import '../providers/settings_provider.dart';
-import '../providers/notification_provider.dart';
 
 class AppShell extends StatelessWidget {
   final StatefulNavigationShell navigationShell;
@@ -14,7 +13,6 @@ class AppShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     context.watch<SettingsProvider>();
-    final unreadCount = context.watch<NotificationProvider>().unreadCount;
     final currentIndex = navigationShell.currentIndex;
 
     return Scaffold(
@@ -45,8 +43,7 @@ class AppShell extends StatelessWidget {
                 _buildNavItem(1, Icons.assignment_outlined, Icons.assignment, 'OPD', currentIndex, () => navigationShell.goBranch(1), null),
                 _buildNavItem(2, Icons.people_outline, Icons.people, 'Patients', currentIndex, () => navigationShell.goBranch(2), null),
                 _buildNavItem(3, Icons.calendar_today_outlined, Icons.calendar_today, 'Calendar', currentIndex, () => navigationShell.goBranch(3), null),
-                _buildNavItem(4, Icons.settings_outlined, Icons.settings, 'Settings', currentIndex, () => navigationShell.goBranch(4),
-                    unreadCount > 0 ? unreadCount : null),
+                _buildNavItem(4, Icons.settings_outlined, Icons.settings, 'Settings', currentIndex, () => navigationShell.goBranch(4), null),
               ],
             ),
           ),

@@ -396,17 +396,13 @@ class PatientDetailsScreen extends StatelessWidget {
                                 icon: Icon(Icons.share, size: 20),
                                 label: Text('Share'),
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.white,
-                                  foregroundColor: AppTheme.textPrimary,
+                                  backgroundColor: AppTheme.primary,
+                                  foregroundColor: Colors.white,
                                   padding: const EdgeInsets.symmetric(
                                     vertical: 16,
                                   ),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(16),
-                                  ),
-                                  side: BorderSide(
-                                    color: AppTheme.border,
-                                    width: 2,
                                   ),
                                   elevation: 0,
                                 ),

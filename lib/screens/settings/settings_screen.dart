@@ -7,6 +7,7 @@ import '../../widgets/settings_group_tile.dart';
 import '../../widgets/standard_header.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/settings_provider.dart';
+import '../../providers/notification_provider.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -594,6 +595,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final settings = context.watch<SettingsProvider>();
+    final unreadCount = context.watch<NotificationProvider>().unreadCount;
 
     return Scaffold(
       backgroundColor: AppTheme.background,
@@ -741,6 +743,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     SettingsGroupTile(
                       icon: Icons.notifications_outlined,
                       label: 'Notifications',
+                      badge: unreadCount > 0 ? (unreadCount > 9 ? '9+' : unreadCount.toString()) : null,
                       onTap: () => context.push('/app/settings/notifications'),
                     ),
                     SettingsGroupTile(
