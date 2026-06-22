@@ -63,19 +63,20 @@ class SettingsGroupTile extends StatelessWidget {
                 ),
                 if (badge != null)
                   Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.all(4),
                     decoration: BoxDecoration(
                       color: AppTheme.danger,
-                      borderRadius: BorderRadius.circular(12),
+                      shape: BoxShape.circle,
                     ),
+                    constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
                     child: Text(
                       badge!,
-                      style: TextStyle(
-                        color: AppTheme.textOnPrimary,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
                       ),
+                      textAlign: TextAlign.center,
                     ),
                   ),
                 if (badge != null) SizedBox(width: 8),

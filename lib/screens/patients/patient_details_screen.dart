@@ -109,17 +109,19 @@ class PatientDetailsScreen extends StatelessWidget {
             child: Column(
               children: [
                 // Header with patient profile
-                Container(
-                  decoration: BoxDecoration(
-                    gradient: AppTheme.primaryGradient,
-                    borderRadius: BorderRadius.only(
-                      bottomLeft: Radius.circular(28),
-                      bottomRight: Radius.circular(28),
+                Transform.translate(
+                  offset: const Offset(0, -1),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      gradient: AppTheme.primaryGradient,
+                      borderRadius: BorderRadius.only(
+                        bottomLeft: Radius.circular(28),
+                        bottomRight: Radius.circular(28),
+                      ),
+                      boxShadow: [...AppTheme.heavyShadow, ...AppTheme.subtleShadow],
                     ),
-                    boxShadow: [...AppTheme.heavyShadow, ...AppTheme.subtleShadow],
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 13, 16, 28),
                     child: Column(
                       children: [
                         Container(
@@ -195,8 +197,9 @@ class PatientDetailsScreen extends StatelessWidget {
                     ),
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.all(16),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(16),
                   child: Column(
                     children: [
                       // Contact Info
