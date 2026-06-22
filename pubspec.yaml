@@ -1,7 +1,7 @@
 name: medihive
 description: MediHive - Healthcare Management System
 publish_to: 'none'
-version: 1.0.3+2
+version: 1.0.4+3
 
 environment:
   sdk: ^3.8.0
@@ -81,4 +81,5 @@ dev_dependencies:
 flutter:
   assets:
     - shorebird.yaml
+    - assets/images/
   uses-material-design: true

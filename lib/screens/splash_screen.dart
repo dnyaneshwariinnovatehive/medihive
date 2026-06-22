@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
-import '../theme/app_theme.dart';
 import '../widgets/medical_pulse.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -117,10 +116,11 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
                   },
                   child: MedicalPulse(
                     size: 200,
-                    child: const Icon(
-                      Icons.medical_services_outlined,
-                      size: 80,
-                      color: AppTheme.primary,
+                    child: Image.asset(
+                      'assets/images/logo.png',
+                      height: 200,
+                      width: 200,
+                      fit: BoxFit.contain,
                     ),
                   ),
                 ),

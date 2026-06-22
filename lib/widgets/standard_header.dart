@@ -55,10 +55,11 @@ class StandardHeader extends StatelessWidget {
             ),
           Padding(
             padding: EdgeInsets.only(left: showBack ? 4 : 16),
-            child: Icon(
-              Icons.medical_services_outlined,
-              size: 30,
-              color: Colors.white.withValues(alpha: 0.9),
+            child: Image.asset(
+              'assets/images/logo.png',
+              height: 80,
+              width: 80,
+              fit: BoxFit.contain,
             ),
           ),
         ],

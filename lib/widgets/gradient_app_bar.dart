@@ -180,10 +180,11 @@ class GradientAppBar extends StatelessWidget {
                       ],
                     ),
                   ),
-                  Icon(
-                    Icons.medical_services_outlined,
-                    size: 36,
-                    color: Colors.white.withValues(alpha: 0.9),
+                  Image.asset(
+                    'assets/images/logo.png',
+                    height: 80,
+                    width: 80,
+                    fit: BoxFit.contain,
                   ),
                   const SyncCloudStatusIcon(),
                   if (trailing != null) trailing!,
@@ -260,10 +261,11 @@ class SliverGradientAppBar extends StatelessWidget {
             )
           : null,
       actions: [
-        Icon(
-          Icons.medical_services_outlined,
-          size: 36,
-          color: Colors.white.withValues(alpha: 0.9),
+        Image.asset(
+          'assets/images/logo.png',
+          height: 80,
+          width: 80,
+          fit: BoxFit.contain,
         ),
         const SyncCloudStatusIcon(),
         if (trailing != null) trailing!,
