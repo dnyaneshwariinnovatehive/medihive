@@ -1057,10 +1057,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     }
                   }
                 },
-                icon: Image.asset(
-                  'assets/images/google_g.png',
-                  height: 20,
-                  width: 20,
+                icon: ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: Image.network(
+                    'https://ssl.gstatic.com/images/branding/googleg/2x/googleg_standard_color_48dp.png',
+                    height: 20,
+                    width: 20,
+                    fit: BoxFit.cover,
+                    loadingBuilder: (context, child, loadingProgress) =>
+                        loadingProgress == null
+                            ? child
+                            : const SizedBox(width: 20, height: 20),
+                    errorBuilder: (context, error, stackTrace) =>
+                        const Icon(Icons.login, size: 20),
+                  ),
                 ),
                 label: Text(
                   'Connect Google Drive for Backup',
