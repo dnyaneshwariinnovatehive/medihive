@@ -39,8 +39,8 @@ class OPDRecord:
             INSERT INTO opd_records (id, patient_id, type, symptoms, diagnosis, medicines,
                 visit_date, clinical_notes, consultation_fee, medicine_fee, discount,
                 payment_mode, charge_type, previous_visit_date, follow_up_reason,
-                next_visit, blood_group, created_at, updated_at, is_synced)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                next_visit, blood_group, image_links, created_at, updated_at, is_synced)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         """, (
             data['id'], data['patient_id'], data.get('type', 'consultation'),
             data.get('symptoms', ''), data.get('diagnosis', ''),
@@ -50,6 +50,7 @@ class OPDRecord:
             data.get('payment_mode', ''), data.get('charge_type', ''),
             data.get('previous_visit_date', ''), data.get('follow_up_reason', ''),
             data.get('next_visit', ''), data.get('blood_group', ''),
+            data.get('image_links', ''),
             now, now
         ))
         db.commit()
@@ -62,7 +63,8 @@ class OPDRecord:
         allowed = ('type', 'symptoms', 'diagnosis', 'medicines', 'visit_date',
                    'clinical_notes', 'consultation_fee', 'medicine_fee', 'discount',
                    'payment_mode', 'charge_type', 'previous_visit_date',
-                   'follow_up_reason', 'next_visit', 'blood_group')
+                   'follow_up_reason', 'next_visit', 'blood_group',
+                   'image_links')
         fields = []
         values = []
         for k in allowed:
@@ -93,6 +95,17 @@ class OPDRecord:
         if existing:
             return OPDRecord.update(data['id'], data)
         return OPDRecord.create(data)
+
+    @staticmethod
+    def set_image_links(record_id, links_text):
+        now = datetime.utcnow().isoformat()
+        db = get_db()
+        db.execute(
+            "UPDATE opd_records SET image_links = ?, updated_at = ? WHERE id = ?",
+            (links_text, now, record_id)
+        )
+        db.commit()
+        db.close()
 
     @staticmethod
     def updated_since(timestamp):

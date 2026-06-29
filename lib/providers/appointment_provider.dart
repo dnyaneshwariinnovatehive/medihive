@@ -1,12 +1,19 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:hive/hive.dart';
 import '../models/appointment.dart';
 import '../models/appointment_model.dart';
+import '../repositories/calendar_notes_repository.dart';
+import '../repositories/patient_repository.dart';
+import '../repositories/opd_record_repository.dart';
 import 'notification_provider.dart';
 import '../services/daily_summary_service.dart';
+import '../utils/sync_id_generator.dart';
 
 class AppointmentProvider extends ChangeNotifier {
+  final CalendarNotesRepository _notesRepo = CalendarNotesRepository();
+
   DateTime _currentDate = DateTime.now();
   int _selectedDay = DateTime.now().day;
   final Map<String, List<String>> _dayNotes = {};
@@ -26,18 +33,32 @@ class AppointmentProvider extends ChangeNotifier {
 
   String _noteKeyFor(int year, int month, int day) => '$year-$month-$day';
 
-  void loadNotesFromHive() {
+  Future<void> _loadNotes() async {
     try {
-      final box = Hive.box('day_notes');
+      final rows = await _notesRepo.getAll();
       _dayNotes.clear();
-      for (final key in box.keys) {
-        final val = box.get(key);
-        if (val is String) {
-          _dayNotes[key.toString()] = [val];
-        } else if (val is List) {
-          _dayNotes[key.toString()] = val.cast<String>();
+      for (final row in rows) {
+        final noteDate = row['note_date'] as String? ?? '';
+        final noteText = row['note_text'] as String? ?? '';
+        List<String> notes;
+        try {
+          final decoded = jsonDecode(noteText);
+          if (decoded is List) {
+            notes = decoded.cast<String>();
+          } else {
+            notes = noteText.isEmpty ? [] : [noteText];
+          }
+        } catch (_) {
+          notes = noteText.isEmpty ? [] : [noteText];
+        }
+        final parts = noteDate.split('-');
+        if (parts.length == 3) {
+          final hiveKey =
+              '${int.parse(parts[0])}-${int.parse(parts[1])}-${int.parse(parts[2])}';
+          _dayNotes[hiveKey] = notes;
         }
       }
+      notifyListeners();
     } catch (_) {}
   }
 
@@ -48,22 +69,24 @@ class AppointmentProvider extends ChangeNotifier {
 
   AppointmentProvider() {
     _loadFromHive();
-    loadNotesFromHive();
+    _loadNotes();
+    _refreshHasRealData();
     _apptSubscription = Hive.box<AppointmentModel>('appointments').watch().listen((_) {
       _loadFromHive();
     });
   }
 
-  void _loadFromHive() {
+  Future<void> _loadFromHive() async {
     try {
       final box = Hive.box<AppointmentModel>('appointments');
       _appointments.clear();
       for (final m in box.values) {
+        final patientName = await _patientNameFromId(m.patientId);
         _appointments.add(Appointment(
           id: m.id,
           dateTime: m.dateTime,
           type: m.notes == 'Follow-up' ? 'Follow-up' : 'Consultation',
-          patient: _patientNameFromId(m.patientId),
+          patient: patientName,
           time: '${m.dateTime.hour.toString().padLeft(2, '0')}:${m.dateTime.minute.toString().padLeft(2, '0')}',
         ));
       }
@@ -76,12 +99,14 @@ class AppointmentProvider extends ChangeNotifier {
     } catch (_) {}
   }
 
-  String _patientNameFromId(String patientId) {
+  Future<String> _patientNameFromId(String patientId) async {
     try {
-      final patientBox = Hive.box('patients');
-      final patient = patientBox.get(patientId);
+      final sqliteId = int.tryParse(patientId.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+      if (sqliteId == 0) return patientId;
+      final patient = await PatientRepository().getById(sqliteId);
       if (patient != null) {
-        return (patient as dynamic).name ?? patientId;
+        final name = patient['full_name'] as String?;
+        if (name != null && name.isNotEmpty) return name;
       }
     } catch (_) {}
     return patientId;
@@ -96,15 +121,20 @@ class AppointmentProvider extends ChangeNotifier {
           a.dateTime.year == _currentDate.year,
       ).toList();
 
-  bool get _hasRealData {
+  bool _hasRealDataCached = false;
+
+  Future<void> _refreshHasRealData() async {
     try {
-      return Hive.box('opd_records').isNotEmpty ||
-          Hive.box<AppointmentModel>('appointments').isNotEmpty ||
-          Hive.box('patients').isNotEmpty;
+      final patientCount = await PatientRepository().count();
+      final opdCount = await OpdRecordRepository().count();
+      final apptCount = Hive.box<AppointmentModel>('appointments').length;
+      _hasRealDataCached = patientCount > 0 || opdCount > 0 || apptCount > 0;
     } catch (_) {
-      return false;
+      _hasRealDataCached = false;
     }
   }
+
+  bool get _hasRealData => _hasRealDataCached;
 
   List<Appointment> get upcomingFollowUps {
     final now = DateTime.now();
@@ -163,10 +193,7 @@ class AppointmentProvider extends ChangeNotifier {
     final key = _noteKeyFor(_currentDate.year, _currentDate.month, _selectedDay);
     _dayNotes.putIfAbsent(key, () => []);
     _dayNotes[key]!.add(value.trim());
-    try {
-      final box = Hive.box('day_notes');
-      box.put(key, _dayNotes[key]);
-    } catch (_) {}
+    _saveNotesForDate(key, _dayNotes[key]!);
     notifyListeners();
 
     _scheduleNoteReminder(_currentDate.year, _currentDate.month, _selectedDay, value.trim());
@@ -192,13 +219,9 @@ class AppointmentProvider extends ChangeNotifier {
       notes.removeAt(index);
       if (notes.isEmpty) {
         _dayNotes.remove(key);
-        try {
-          Hive.box('day_notes').delete(key);
-        } catch (_) {}
+        _deleteNotesForDate(key);
       } else {
-        try {
-          Hive.box('day_notes').put(key, notes);
-        } catch (_) {}
+        _saveNotesForDate(key, notes);
       }
       notifyListeners();
     }
@@ -207,9 +230,7 @@ class AppointmentProvider extends ChangeNotifier {
   void removeNoteForDay(int day) {
     final key = _noteKeyFor(_currentDate.year, _currentDate.month, day);
     _dayNotes.remove(key);
-    try {
-      Hive.box('day_notes').delete(key);
-    } catch (_) {}
+    _deleteNotesForDate(key);
     notifyListeners();
   }
 
@@ -241,33 +262,40 @@ class AppointmentProvider extends ChangeNotifier {
         a.dateTime.year == _currentDate.year).toList();
   }
 
-  void addAppointment({
+  Future<void> addAppointment({
     required DateTime dateTime,
     required String type,
     required String patient,
     required String time,
     String? patientId,
-  }) {
+  }) async {
     _nextId++;
     final id = 'apt_$_nextId';
-    _appointments.add(Appointment(
-      id: id,
-      dateTime: dateTime,
-      type: type,
-      patient: patient,
-      time: time,
-    ));
     try {
       final box = Hive.box<AppointmentModel>('appointments');
       if (patientId == null || patientId.isEmpty) {
-        final patientBox = Hive.box('patients');
-        for (final p in patientBox.values) {
-          if ((p as dynamic).name == patient) {
-            patientId = (p as dynamic).id ?? '';
+        final allPatients = await PatientRepository().getAll();
+        for (final p in allPatients) {
+          if ((p['full_name'] as String?) == patient) {
+            patientId = 'P${p['id']}';
             break;
           }
         }
       }
+      // Prevent duplicate appointment for the same patient on the same day
+      final isDuplicate = _appointments.any((a) =>
+        a.patient == patient &&
+        a.dateTime.year == dateTime.year &&
+        a.dateTime.month == dateTime.month &&
+        a.dateTime.day == dateTime.day);
+      if (isDuplicate) return;
+      _appointments.add(Appointment(
+        id: id,
+        dateTime: dateTime,
+        type: type,
+        patient: patient,
+        time: time,
+      ));
       box.put(id, AppointmentModel(
         id: id,
         patientId: patientId ?? '',
@@ -288,6 +316,52 @@ class AppointmentProvider extends ChangeNotifier {
       box.delete(id);
     } catch (_) {}
     notifyListeners();
+  }
+
+  String _hiveKeyToSqlDate(String hiveKey) {
+    final parts = hiveKey.split('-');
+    if (parts.length == 3) {
+      return '${parts[0].padLeft(4, '0')}-${parts[1].padLeft(2, '0')}-${parts[2].padLeft(2, '0')}';
+    }
+    return hiveKey;
+  }
+
+  Future<void> _saveNotesForDate(String hiveKey, List<String> notes) async {
+    try {
+      final sqlDate = _hiveKeyToSqlDate(hiveKey);
+      final noteText = jsonEncode(notes);
+      final existing = await _notesRepo.getByDate(sqlDate);
+      final now = DateTime.now().toIso8601String();
+      if (existing != null) {
+        await _notesRepo.update(existing['id'] as int, {
+          'note_text': noteText,
+          'updated_at': now,
+        });
+      } else {
+        await _notesRepo.insert({
+          'id': SyncIdGenerator.nextId(),
+          'note_date': sqlDate,
+          'note_text': noteText,
+          'created_at': now,
+          'updated_at': now,
+        });
+      }
+    } catch (e, st) {
+      debugPrint('SYNC QUEUE INSERT FAILED: $e');
+      debugPrintStack(stackTrace: st);
+      rethrow;
+    }
+  }
+
+  Future<void> _deleteNotesForDate(String hiveKey) async {
+    try {
+      final sqlDate = _hiveKeyToSqlDate(hiveKey);
+      await _notesRepo.deleteByDate(sqlDate);
+    } catch (e, st) {
+      debugPrint('DELETE NOTES FAILED: $e');
+      debugPrintStack(stackTrace: st);
+      rethrow;
+    }
   }
 
   @override

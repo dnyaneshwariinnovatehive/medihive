@@ -1,17 +1,15 @@
 import 'dart:typed_data';
 import 'package:excel/excel.dart';
 import 'package:hive/hive.dart';
-import '../models/patient_model.dart';
-import '../models/opd_record_model.dart';
 import '../models/appointment_model.dart';
+import '../repositories/patient_repository.dart';
+import '../repositories/opd_record_repository.dart';
 
 class ExcelExportService {
-  // Singleton instance
   static final ExcelExportService _instance = ExcelExportService._internal();
   factory ExcelExportService() => _instance;
   ExcelExportService._internal();
 
-  /// Formats date as DD/MM/YYYY
   String _formatDate(DateTime? date) {
     if (date == null) return '';
     final day = date.day.toString().padLeft(2, '0');
@@ -20,7 +18,6 @@ class ExcelExportService {
     return '$day/$month/$year';
   }
 
-  /// Formats time as hh:mm AM/PM
   String _formatTime(DateTime? date) {
     if (date == null) return '';
     final hour = date.hour;
@@ -30,7 +27,6 @@ class ExcelExportService {
     return '${displayHour.toString().padLeft(2, '0')}:$minute $amPm';
   }
 
-  /// Helper to convert raw dart types into type-safe excel CellValue
   CellValue? _toCellValue(dynamic val) {
     if (val == null) return null;
     if (val is int) return IntCellValue(val);
@@ -39,24 +35,22 @@ class ExcelExportService {
     return TextCellValue(val.toString());
   }
 
-  /// Generates the standard file name for Excel export:
-  /// "MediHive_[clinicName]_[timestamp].xlsx"
   String generateFileName(String clinicName, {int recordCount = 0}) {
     final cleanClinicName = clinicName.replaceAll(RegExp(r'\s+'), '_');
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     return 'MediHive_${cleanClinicName}_${recordCount}_records_$timestamp.xlsx';
   }
 
-  /// Exports all local Hive data to Excel bytes
   Future<Uint8List> generateExcelFile({String clinicName = 'Shree Clinic'}) async {
-    final patients = Hive.box<PatientModel>('patients').values.toList();
-    final opdRecords = Hive.box<OPDRecordModel>('opd_records').values.toList();
+    final patientRepo = PatientRepository();
+    final opdRepo = OpdRecordRepository();
+    final patients = await patientRepo.getAll();
+    final opdRecords = await opdRepo.getAll();
     final appointments = Hive.box<AppointmentModel>('appointments').values.toList();
 
     return _buildExcel(patients, opdRecords, appointments, clinicName);
   }
 
-  /// Exports only today's records (created or modified today)
   Future<Uint8List> generateDailyReport({String clinicName = 'Shree Clinic'}) async {
     final today = DateTime.now();
 
@@ -64,16 +58,20 @@ class ExcelExportService {
       return date.year == today.year && date.month == today.month && date.day == today.day;
     }
 
-    final patients = Hive.box<PatientModel>('patients')
-        .values
-        .where((p) => isToday(p.createdAt))
-        .toList();
-
-    final opdRecords = Hive.box<OPDRecordModel>('opd_records')
-        .values
-        .where((r) => isToday(r.visitDate) || isToday(r.createdAt))
-        .toList();
-
+    final patientRepo = PatientRepository();
+    final opdRepo = OpdRecordRepository();
+    final allPatients = await patientRepo.getAll();
+    final allOpd = await opdRepo.getAll();
+    final patients = allPatients.where((p) {
+      final dt = DateTime.tryParse(p['created_at'] as String? ?? '');
+      return dt != null && isToday(dt);
+    }).toList();
+    final opdRecords = allOpd.where((r) {
+      final visitDt = DateTime.tryParse(r['visit_datetime'] as String? ?? '');
+      final createdDt = DateTime.tryParse(r['created_at'] as String? ?? '');
+      return (visitDt != null && isToday(visitDt)) ||
+          (createdDt != null && isToday(createdDt));
+    }).toList();
     final appointments = Hive.box<AppointmentModel>('appointments')
         .values
         .where((a) => isToday(a.dateTime) || isToday(a.createdAt))
@@ -82,16 +80,14 @@ class ExcelExportService {
     return _buildExcel(patients, opdRecords, appointments, clinicName);
   }
 
-  /// Core builder that maps, structures, and formats data into Excel
   Future<Uint8List> _buildExcel(
-    List<PatientModel> patients,
-    List<OPDRecordModel> opdRecords,
+    List<Map<String, dynamic>> patients,
+    List<Map<String, dynamic>> opdRecords,
     List<AppointmentModel> appointments,
     String clinicName,
   ) async {
     final excel = Excel.createExcel();
 
-    // ─── Formatting Configurations ────────────────────────────────
     final CellStyle headerStyle = CellStyle(
       fontColorHex: ExcelColor.fromHexString('#FFFFFF'),
       backgroundColorHex: ExcelColor.fromHexString('#1565C0'),
@@ -116,14 +112,11 @@ class ExcelExportService {
     final year = now.year;
     final dashboardSheetName = 'MediHive_Backup_$day-$month-$year';
 
-    // Rename default Sheet1 to the custom dashboard sheet name
     excel.rename('Sheet1', dashboardSheetName);
     final dashboardSheet = excel[dashboardSheetName];
 
-    // ─── Dashboard Sheet Generation ────────────────────────────────
     _writeRow(dashboardSheet, 0, ['MediHive Clinic Backup Dashboard'], headerStyle);
-    
-    // Details
+
     _writeRow(dashboardSheet, 2, ['Clinic Name', clinicName], normalStyle);
     _writeRow(dashboardSheet, 3, ['Backup Date', '$day/$month/$year'], altStyle);
     _writeRow(dashboardSheet, 4, ['Total Patients In File', patients.length.toString()], normalStyle);
@@ -132,7 +125,6 @@ class ExcelExportService {
 
     _autoFitColumns(dashboardSheet);
 
-    // ─── Sheet 1: Patients ─────────────────────────────────────────
     final patientsSheet = excel['Patients'];
     final patientsHeaders = [
       'Patient ID',
@@ -152,32 +144,41 @@ class ExcelExportService {
       final p = patients[i];
       final rowStyle = i % 2 == 1 ? altStyle : normalStyle;
 
-      // Compute total visits and last visit date from OPD records
-      final totalVisits = opdRecords.where((r) => r.patientId == p.id).length;
-      final patientOpd = opdRecords.where((r) => r.patientId == p.id).toList();
+      final pId = 'P${p['id']}';
+      final totalVisits = opdRecords
+          .where((r) => r['patient_id'] == p['id'])
+          .length;
+      final patientOpd = opdRecords
+          .where((r) => r['patient_id'] == p['id'])
+          .toList();
       String lastVisitStr = 'Never';
       if (patientOpd.isNotEmpty) {
-        patientOpd.sort((a, b) => b.visitDate.compareTo(a.visitDate));
-        lastVisitStr = _formatDate(patientOpd.first.visitDate);
+        patientOpd.sort((a, b) {
+          final aDt = DateTime.tryParse(a['visit_datetime'] as String? ?? '') ?? DateTime(2000);
+          final bDt = DateTime.tryParse(b['visit_datetime'] as String? ?? '') ?? DateTime(2000);
+          return bDt.compareTo(aDt);
+        });
+        final lastDt = DateTime.tryParse(patientOpd.first['visit_datetime'] as String? ?? '');
+        if (lastDt != null) lastVisitStr = _formatDate(lastDt);
       }
+      final createdDt = DateTime.tryParse(p['created_at'] as String? ?? '');
 
       final data = [
-        p.id,
-        p.name,
-        p.dob,
-        p.age.toString(),
-        p.mobile,
-        p.address,
+        pId,
+        p['full_name'] as String? ?? '',
+        p['dob'] as String? ?? '',
+        (p['age'] as int? ?? 0).toString(),
+        p['mobile_number'] as String? ?? '',
+        p['address'] as String? ?? '',
         totalVisits.toString(),
         lastVisitStr,
-        _formatDate(p.createdAt),
-        _formatDate(p.updatedAt),
+        _formatDate(createdDt),
+        _formatDate(createdDt),
       ];
       _writeRow(patientsSheet, i + 1, data, rowStyle);
     }
     _autoFitColumns(patientsSheet);
 
-    // ─── Sheet 2: OPD Records ──────────────────────────────────────
     final opdSheet = excel['OPD Records'];
     final opdHeaders = [
       'Record ID',
@@ -199,32 +200,32 @@ class ExcelExportService {
       final r = opdRecords[i];
       final rowStyle = i % 2 == 1 ? altStyle : normalStyle;
 
-      // Look up patient name
-      final patient = patients.cast<PatientModel?>().firstWhere(
-            (p) => p?.id == r.patientId,
-            orElse: () => null,
-          );
-      final patientName = patient?.name ?? 'Unknown Patient';
+      final rPatientId = r['patient_id'];
+      final patient = patients.cast<Map<String, dynamic>?>().firstWhere(
+        (p) => p?['id'] == rPatientId,
+        orElse: () => null,
+      );
+      final patientName = patient?['full_name'] as String? ?? 'Unknown Patient';
+      final rCreatedDt = DateTime.tryParse(r['created_at'] as String? ?? '');
 
       final data = [
-        r.id,
-        r.patientId,
+        r['opd_id'] as String? ?? '',
+        'P$rPatientId',
         patientName,
-        r.type,
-        _formatDate(r.visitDate),
-        r.symptoms,
-        r.diagnosis,
-        r.medicines,
+        r['opd_type'] as String? ?? '',
+        _formatDate(DateTime.tryParse(r['visit_datetime'] as String? ?? '')),
+        r['symptoms'] as String? ?? '',
+        r['diagnosis'] as String? ?? '',
+        r['medicines'] as String? ?? '',
         'N/A',
         'N/A',
-        r.isDraft ? 'Draft' : 'Final',
-        _formatDate(r.updatedAt),
+        'Final',
+        _formatDate(rCreatedDt),
       ];
       _writeRow(opdSheet, i + 1, data, rowStyle);
     }
     _autoFitColumns(opdSheet);
 
-    // ─── Sheet 3: Appointments ─────────────────────────────────────
     final apptSheet = excel['Appointments'];
     final apptHeaders = [
       'Appt ID',
@@ -241,12 +242,11 @@ class ExcelExportService {
       final a = appointments[i];
       final rowStyle = i % 2 == 1 ? altStyle : normalStyle;
 
-      // Look up patient name
-      final patient = patients.cast<PatientModel?>().firstWhere(
-            (p) => p?.id == a.patientId,
-            orElse: () => null,
-          );
-      final patientName = patient?.name ?? 'Unknown Patient';
+      final patient = patients.cast<Map<String, dynamic>?>().firstWhere(
+        (p) => p?['id'] == int.tryParse(a.patientId.replaceAll(RegExp(r'[^0-9]'), '')),
+        orElse: () => null,
+      );
+      final patientName = patient?['full_name'] as String? ?? 'Unknown Patient';
 
       final data = [
         a.id,
@@ -261,12 +261,10 @@ class ExcelExportService {
     }
     _autoFitColumns(apptSheet);
 
-    // Return the converted binary bytes
     final bytes = excel.encode();
     return Uint8List.fromList(bytes ?? []);
   }
 
-  /// Helper to write an entire row of cell data with style
   void _writeRow(Sheet sheet, int rowIndex, List<String> values, CellStyle style) {
     for (int colIndex = 0; colIndex < values.length; colIndex++) {
       final cell = sheet.cell(CellIndex.indexByColumnRow(columnIndex: colIndex, rowIndex: rowIndex));
@@ -275,7 +273,6 @@ class ExcelExportService {
     }
   }
 
-  /// Helper to automatically adjust column width to fit largest value content
   void _autoFitColumns(Sheet sheet) {
     final maxCols = sheet.maxColumns;
     final maxRows = sheet.maxRows;

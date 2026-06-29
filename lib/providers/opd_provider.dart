@@ -4,13 +4,20 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hive/hive.dart';
 import '../models/opd_form_data.dart';
-import '../models/opd_record_model.dart';
-import '../services/local_storage_service.dart';
 import '../services/event_notification_service.dart';
+import '../repositories/opd_record_repository.dart';
+import '../repositories/patient_repository.dart';
+import '../repositories/sync_queue_repository.dart';
+import '../utils/sync_id_generator.dart';
+import '../services/sync_manager.dart';
 import 'dashboard_provider.dart';
 import 'appointment_provider.dart';
 
 class OpdProvider extends ChangeNotifier {
+  final OpdRecordRepository _opdRepo = OpdRecordRepository();
+  final PatientRepository _patientRepo = PatientRepository();
+  final SyncQueueRepository _syncQueueRepo = SyncQueueRepository();
+
   int _currentStep = 0;
   final int totalSteps = 3;
   final OpdFormData _formData = OpdFormData();
@@ -186,52 +193,46 @@ class OpdProvider extends ChangeNotifier {
     prescribedMedicines = medicines;
   }
 
-  void loadPatientForEdit(String patientId) {
+  Future<void> loadPatientForEdit(String patientId) async {
     reset();
     hasDraft = false;
 
     try {
-      final patientsBox = Hive.box('patients');
-      final opdBox = Hive.box<OPDRecordModel>('opd_records');
-
-      final patient = patientsBox.get(patientId);
+      final sqliteId = _toSqliteId(patientId);
+      final patient = await _patientRepo.getById(sqliteId);
       if (patient == null) return;
 
-      final p = patient as dynamic;
       updateField('patientId', patientId);
-      updateField('name', p.name?.toString() ?? '');
-      updateField('dob', p.dob?.toString() ?? '');
-      updateField('age', p.age?.toString() ?? '');
-      updateField('gender', p.gender?.toString() ?? 'Male');
-      updateField('mobile', p.mobile?.toString() ?? '');
-      updateField('address', p.address?.toString() ?? '');
-      updateField('bloodGroup', p.bloodGroup?.toString() ?? 'O+');
+      updateField('name', patient['full_name']?.toString() ?? '');
+      updateField('dob', patient['dob']?.toString() ?? '');
+      updateField('age', patient['age']?.toString() ?? '');
+      updateField('gender', patient['gender']?.toString() ?? 'Male');
+      updateField('mobile', patient['mobile_number']?.toString() ?? '');
+      updateField('address', patient['address']?.toString() ?? '');
+      updateField('bloodGroup', patient['blood_group']?.toString() ?? 'O+');
 
-      final records = opdBox.values
-          .where((r) => r.patientId == patientId)
-          .toList();
-      records.sort((a, b) => b.visitDate.compareTo(a.visitDate));
+      final records = await _opdRepo.getByPatientId(sqliteId);
       if (records.isNotEmpty) {
         final latest = records.first;
-        updateField('diagnosis', latest.diagnosis);
-        updateField('symptoms', latest.symptoms);
-        updateField('medicines', latest.medicines);
-        updateField('clinicalNotes', latest.clinicalNotes);
+        updateField('diagnosis', latest['diagnosis']?.toString() ?? '');
+        updateField('symptoms', latest['symptoms']?.toString() ?? '');
+        updateField('medicines', latest['medicines']?.toString() ?? '');
+        updateField('clinicalNotes', latest['clinical_notes']?.toString() ?? '');
         updateField(
           'opdType',
-          latest.type == 'follow_up' ? 'Follow-up' : 'Consultation',
+          latest['opd_type']?.toString() == 'follow_up' ? 'Follow-up' : 'Consultation',
         );
-        updateField('consultationFee', latest.consultationFee);
-        updateField('medicineFee', latest.medicineFee);
-        updateField('discount', latest.discount);
-        updateField('paymentMode', latest.paymentMode);
-        updateField('chargeType', latest.chargeType);
-        updateField('previousVisitDate', latest.previousVisitDate);
-        updateField('followUpReason', latest.followUpReason);
-        updateField('nextVisit', latest.nextVisit);
-        _visitType = latest.type;
-        if (latest.previousVisitDate.isNotEmpty) {
-          _previousVisitDate = DateTime.tryParse(latest.previousVisitDate);
+        updateField('consultationFee', latest['consultation_fee']?.toString() ?? '');
+        updateField('medicineFee', latest['medicine_fee']?.toString() ?? '');
+        updateField('discount', _readDiscountString(latest));
+        updateField('paymentMode', latest['payment_mode']?.toString() ?? '');
+        updateField('chargeType', latest['charge_type']?.toString() ?? '');
+        updateField('previousVisitDate', latest['previous_visit_date']?.toString() ?? '');
+        updateField('followUpReason', latest['followup_status']?.toString() ?? '');
+        updateField('nextVisit', latest['next_visit_date']?.toString() ?? '');
+        _visitType = latest['opd_type']?.toString() ?? 'consultation';
+        if ((latest['previous_visit_date']?.toString() ?? '').isNotEmpty) {
+          _previousVisitDate = DateTime.tryParse(latest['previous_visit_date'].toString());
         }
       }
     } catch (_) {
@@ -244,7 +245,7 @@ class OpdProvider extends ChangeNotifier {
 
   OpdFormData get formData => _formData;
 
-  // Hive Draft System Private & Public Save Methods
+  // Hive Draft System — kept as-is (transient UI state, no SQLite table)
   void _saveDraftToHive() {
     try {
       final box = Hive.isBoxOpen('drafts') ? Hive.box('drafts') : null;
@@ -537,74 +538,94 @@ class OpdProvider extends ChangeNotifier {
       final patientName = _formData.name.isEmpty ? 'Unknown' : _formData.name;
 
       // 1. Save OPD Record (update if editing, insert if new)
-      String recordId;
+      final opdId = existingRecordId ?? 'R${DateTime.now().millisecondsSinceEpoch}';
+      print('OPD CREATED id=$opdId');
+      final sqlitePatientId = _toSqliteId(patientId);
       DateTime preservedCreatedAt;
+      int sqliteId;
+
       if (existingRecordId != null) {
-        recordId = existingRecordId;
-        final existing = Hive.box<OPDRecordModel>(
-          'opd_records',
-        ).get(existingRecordId);
-        preservedCreatedAt = existing?.createdAt ?? DateTime.now();
+        final existing = await _opdRepo.getByOpdId(existingRecordId);
+        if (existing != null) {
+          sqliteId = existing['id'] as int;
+          preservedCreatedAt = DateTime.tryParse(existing['created_at']?.toString() ?? '') ?? DateTime.now();
+        } else {
+          sqliteId = DateTime.now().microsecondsSinceEpoch;
+          preservedCreatedAt = DateTime.now();
+        }
       } else {
-        recordId = 'R${DateTime.now().millisecondsSinceEpoch}';
+        sqliteId = DateTime.now().microsecondsSinceEpoch;
         preservedCreatedAt = DateTime.now();
       }
-      final record = OPDRecordModel(
-        id: recordId,
-        patientId: patientId,
-        type: _formData.opdType == 'Follow-up' ? 'follow_up' : 'consultation',
-        symptoms: _formData.symptoms,
-        diagnosis: _formData.diagnosis,
-        medicines: _formData.medicines,
-        visitDate: DateTime.now(),
-        isDraft: false,
-        isSynced: false,
-        createdAt: preservedCreatedAt,
-        updatedAt: DateTime.now(),
-        clinicalNotes: _formData.clinicalNotes,
-        consultationFee: _formData.consultationFee,
-        medicineFee: _formData.medicineFee,
-        discount: _formData.discount,
-        paymentMode: _formData.paymentMode,
-        chargeType: _formData.chargeType,
-        previousVisitDate: _formData.previousVisitDate,
-        followUpReason: _formData.followUpReason,
-        nextVisit: _formData.nextVisit,
-        bloodGroup: _formData.bloodGroup,
-      );
-      await LocalStorageService().saveOPDRecord(record);
+
+      final nowStr = DateTime.now().toIso8601String();
+
+      final recordMap = <String, dynamic>{
+        'id': sqliteId,
+        'opd_id': opdId,
+        'patient_id': sqlitePatientId,
+        'visit_datetime': nowStr,
+        'opd_type': _formData.opdType == 'Follow-up' ? 'follow_up' : 'consultation',
+        'charge_type': _formData.chargeType.isNotEmpty ? _formData.chargeType : null,
+        'diagnosis': _formData.diagnosis.isNotEmpty ? _formData.diagnosis : null,
+        'symptoms': _formData.symptoms.isNotEmpty ? _formData.symptoms : null,
+        'clinical_notes': _formData.clinicalNotes.isNotEmpty ? _formData.clinicalNotes : null,
+        'consultation_fee': _parseFee(_formData.consultationFee),
+        'medicine_fee': _parseFee(_formData.medicineFee),
+        'panchakarma_fee': null,
+        'total_fee': null,
+        'discount_type': null,
+        'discount_value': _parseFee(_formData.discount),
+        'payment_mode': _formData.paymentMode.isNotEmpty ? _formData.paymentMode : null,
+        'next_visit_date': _formData.nextVisit.isNotEmpty ? _formData.nextVisit : null,
+        'followup_status': _formData.followUpReason.isNotEmpty ? _formData.followUpReason : null,
+        'created_at': preservedCreatedAt.toIso8601String(),
+        'medicines': _formData.medicines.isNotEmpty ? _formData.medicines : null,
+        'panchakarma_notes': null,
+      };
+
+      if (existingRecordId != null) {
+        // Preserve original visit_datetime for edits
+        final existingBeforeUpdate = await _opdRepo.getByOpdId(existingRecordId);
+        if (existingBeforeUpdate != null) {
+          final originalVisitDt = existingBeforeUpdate['visit_datetime'] as String? ?? '';
+          if (originalVisitDt.isNotEmpty) {
+            recordMap['visit_datetime'] = originalVisitDt;
+          }
+        }
+        await _opdRepo.update(sqliteId, recordMap);
+        print('CALLING _addSyncQueueEntry for existing opd_visit id=$existingRecordId');
+        await _addSyncQueueEntry('opd_visit', existingRecordId);
+        Future.microtask(() {
+          print('FORCING IMMEDIATE SYNC');
+          SyncManager().forceSyncNow();
+        });
+      } else {
+        await _opdRepo.insert(recordMap);
+        print('CALLING _addSyncQueueEntry for new opd_visit id=$opdId');
+        await _addSyncQueueEntry('opd_visit', opdId);
+        print('OPD ADDED TO SYNC QUEUE: $opdId');
+        Future.microtask(() {
+          print('FORCING IMMEDIATE SYNC');
+          SyncManager().forceSyncNow();
+        });
+      }
 
       if (documentBytes != null && documentBytes.isNotEmpty) {
         try {
           final docBox = Hive.box('opd_documents');
-          await docBox.put(recordId, base64Encode(documentBytes));
-        } catch (_) {
-          debugPrint('Failed to save document for record $recordId');
+          await docBox.put(opdId, base64Encode(documentBytes));
+        } catch (e, st) {
+          print('WARN: Failed to save document for record $opdId: $e');
+          print(st);
         }
       }
 
-      // 2. Create calendar appointment for the current visit
-      if (appointmentProvider != null && patientId.isNotEmpty) {
-        final now = DateTime.now();
-        final timeStr =
-            '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-        final opdType = _formData.opdType == 'Follow-up'
-            ? 'Follow-up'
-            : 'Consultation';
-        appointmentProvider.addAppointment(
-          dateTime: now,
-          type: opdType,
-          patient: patientName,
-          time: timeStr,
-          patientId: patientId,
-        );
-      }
-
-      // 3. Create calendar appointment for future follow-up (nextVisit)
+      // 2. Create calendar appointment for future follow-up (nextVisit)
       if (nextVisit.isNotEmpty && appointmentProvider != null) {
         final visitDate = DateTime.tryParse(nextVisit);
         if (visitDate != null) {
-          appointmentProvider.addAppointment(
+          await appointmentProvider.addAppointment(
             dateTime: visitDate,
             type: 'Follow-up',
             patient: patientName,
@@ -614,15 +635,15 @@ class OpdProvider extends ChangeNotifier {
         }
       }
 
-      // 5. Reset form
+      // 3. Reset form
       reset();
 
-      // 6. Notify dashboard to reload
+      // 4. Notify dashboard to reload
       if (dashboardProvider != null) {
         await dashboardProvider.loadDashboardData();
       }
 
-      // 7. Trigger notification
+      // 5. Trigger notification
       await EventNotificationService.notifyOpdRegistered(
         patientName: patientName,
         type: _formData.opdType == 'Follow-up' ? 'Follow-up' : 'Consultation',
@@ -643,5 +664,48 @@ class OpdProvider extends ChangeNotifier {
       dashboardProvider: dashboardProvider,
       appointmentProvider: appointmentProvider,
     );
+  }
+
+  // ─── Helpers ──────────────────────────────────────────────────
+
+  Future<void> _addSyncQueueEntry(String entityType, String entityId) async {
+    try {
+      debugPrint('_addSyncQueueEntry CALLED: type=$entityType id=$entityId');
+      await _syncQueueRepo.insert({
+        'id': SyncIdGenerator.nextId(),
+        'entity_type': entityType,
+        'entity_id': entityId,
+        'status': 'pending',
+        'retry_count': 0,
+        'created_at': DateTime.now().toIso8601String(),
+      });
+      debugPrint('_addSyncQueueEntry SUCCEEDED: type=$entityType id=$entityId');
+    } catch (e, st) {
+      debugPrint('SYNC QUEUE INSERT FAILED: $e');
+      debugPrintStack(stackTrace: st);
+      rethrow;
+    }
+  }
+
+  int _toSqliteId(String hiveId) {
+    final match = RegExp(r'(\d+)').firstMatch(hiveId);
+    if (match != null) return int.parse(match.group(1)!);
+    return 0;
+  }
+
+  double? _parseFee(String fee) {
+    if (fee.isEmpty) return null;
+    return double.tryParse(fee);
+  }
+
+  String _readDiscountString(Map<String, dynamic> row) {
+    final type = row['discount_type'] as String?;
+    final value = row['discount_value'];
+    if ((type != null && type.isNotEmpty) && value != null) {
+      return '$type: ${(value as num).toStringAsFixed(0)}';
+    } else if (value != null) {
+      return (value as num).toStringAsFixed(0);
+    }
+    return '';
   }
 }

@@ -1,12 +1,13 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:hive/hive.dart';
 import '../models/collection_item.dart';
 import '../models/patient.dart';
-import '../models/patient_model.dart';
-import '../models/opd_record_model.dart';
+import '../repositories/opd_record_repository.dart';
+import '../repositories/patient_repository.dart';
 
 class DashboardProvider extends ChangeNotifier {
+  final OpdRecordRepository _opdRepo = OpdRecordRepository();
+  final PatientRepository _patientRepo = PatientRepository();
+
   String _selectedRange = '7 Days';
   String get selectedRange => _selectedRange;
 
@@ -29,24 +30,12 @@ class DashboardProvider extends ChangeNotifier {
   List<Patient> _recentPatients = [];
   List<Patient> get recentPatients => _recentPatients;
 
-  StreamSubscription? _opdSubscription;
-  StreamSubscription? _patientSubscription;
+  // Cached SQLite rows (populated by loadDashboardData)
+  List<Map<String, dynamic>> _allOpdRows = [];
+  List<Map<String, dynamic>> _allPatientRows = [];
 
   DashboardProvider() {
     loadDashboardData();
-    _opdSubscription = Hive.box<OPDRecordModel>('opd_records').watch().listen((_) {
-      loadDashboardData();
-    });
-    _patientSubscription = Hive.box<PatientModel>('patients').watch().listen((_) {
-      loadDashboardData();
-    });
-  }
-
-  @override
-  void dispose() {
-    _opdSubscription?.cancel();
-    _patientSubscription?.cancel();
-    super.dispose();
   }
 
   Future<void> refresh() async {
@@ -58,72 +47,87 @@ class DashboardProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Calculates dynamic clinic summaries and charts from local Hive boxes
+  /// Calculates dynamic clinic summaries and charts from SQLite
   Future<void> loadDashboardData() async {
     try {
-      final opdBox = Hive.box<OPDRecordModel>('opd_records');
-      final patientBox = Hive.box<PatientModel>('patients');
+      _allOpdRows = await _opdRepo.getAll();
+      _allPatientRows = await _patientRepo.getAll();
       final today = DateTime.now();
 
       // 1. Today's OPD count
-      _todaysOpd = opdBox.values.where((r) =>
-        r.visitDate.year == today.year &&
-        r.visitDate.month == today.month &&
-        r.visitDate.day == today.day
-      ).length;
+      _todaysOpd = _allOpdRows.where((r) {
+        final vd = _parseDateTime(r['visit_datetime']);
+        return vd != null && _isSameDay(vd, today);
+      }).length;
 
-      // 2. Follow-ups due — calculated from calendar appointments
-      // (set externally via setFollowUpsDue from AppointmentProvider data)
+      // 2. Follow-ups due — set externally via setFollowUpsDue
 
-      // 3. Today's revenue — sum actual fees from today's records
-      final todayRecords = opdBox.values.where((r) =>
-        r.visitDate.year == today.year &&
-        r.visitDate.month == today.month &&
-        r.visitDate.day == today.day
-      );
+      // 3. Today's revenue
+      final todayRecords = _allOpdRows.where((r) {
+        final vd = _parseDateTime(r['visit_datetime']);
+        return vd != null && _isSameDay(vd, today);
+      });
       double todayRev = 0;
       for (final r in todayRecords) {
-        todayRev += _extractRecordFee(r);
+        todayRev += _extractFeeFromRow(r);
       }
       _todaysRevenue = '₹${todayRev.toInt().toString()}';
 
-      // 4. Recent OPD Records: last 5 sorted by visitDate descending
-      final seenIds = <String>{};
-      final uniqueOpds = opdBox.values.where((r) => seenIds.add(r.id)).toList()
-        ..sort((a, b) => b.visitDate.compareTo(a.visitDate));
-      final recentOpds = uniqueOpds.take(5).toList();
-      _recentPatients = recentOpds.map((opd) {
-        final p = patientBox.get(opd.patientId);
-        final timeStr = opd.visitDate.toString().split(' ')[1].substring(0, 5);
-        final status = opd.type.isEmpty ? 'waiting' : opd.type;
-        return Patient(
-          id: opd.patientId, // use actual patient ID for navigation
-          name: p?.name ?? 'Unknown Patient',
-          age: p?.age ?? 0,
-          gender: status,
-          mobile: p?.mobile ?? '',
-          lastVisit: timeStr,
-          dob: '',
-          visitCount: 1,
-          diagnosis: '',
-        );
-      }).toList();
+      // 4. Recent OPD Records: last 5 sorted by visit_datetime descending
+      _recentPatients = _buildRecentPatients();
 
-      final List<dynamic> barChartData = []; // satisfies comment requirement
-      debugPrint('Generated barChartData: ${barChartData.length}');
-      
       notifyListeners();
     } catch (_) {
-      // Graceful fallback during startup or uninitialized box states
+      // Graceful fallback during startup
     }
   }
 
-  double _extractRecordFee(OPDRecordModel record) {
-    final consultation = double.tryParse(record.consultationFee) ?? 0;
-    final medicine = double.tryParse(record.medicineFee) ?? 0;
-    final disc = double.tryParse(record.discount) ?? 0;
+  List<Patient> _buildRecentPatients() {
+    final seenIds = <String>{};
+    final unique = <Map<String, dynamic>>[];
+    for (final r in _allOpdRows) {
+      final opdId = r['opd_id']?.toString() ?? '';
+      if (seenIds.add(opdId)) {
+        unique.add(r);
+      }
+    }
+    unique.sort((a, b) {
+      final aDate = _parseDateTime(a['visit_datetime']);
+      final bDate = _parseDateTime(b['visit_datetime']);
+      return (bDate ?? DateTime.now()).compareTo(aDate ?? DateTime.now());
+    });
+    return unique.take(5).map((opd) {
+      final pid = opd['patient_id'] as int? ?? 0;
+      final patient = _allPatientRows.cast<Map<String, dynamic>?>().firstWhere(
+        (p) => p?['id'] == pid,
+        orElse: () => null,
+      );
+      final visitDt = _parseDateTime(opd['visit_datetime']);
+      final timeStr = visitDt != null
+          ? '${visitDt.hour.toString().padLeft(2, '0')}:${visitDt.minute.toString().padLeft(2, '0')}'
+          : '00:00';
+      final status = opd['opd_type']?.toString() ?? 'waiting';
+      return Patient(
+        id: _toStringId(pid),
+        name: patient?['full_name']?.toString() ?? 'Unknown Patient',
+        age: patient?['age'] as int? ?? 0,
+        gender: status,
+        mobile: patient?['mobile_number']?.toString() ?? '',
+        lastVisit: timeStr,
+        dob: '',
+        visitCount: 1,
+        diagnosis: '',
+      );
+    }).toList();
+  }
+
+  double _extractFeeFromRow(Map<String, dynamic> row) {
+    final consultation = (row['consultation_fee'] as num?)?.toDouble() ?? 0;
+    final medicine = (row['medicine_fee'] as num?)?.toDouble() ?? 0;
+    final disc = (row['discount_value'] as num?)?.toDouble() ?? 0;
     final total = consultation + medicine - disc;
-    return total > 0 ? total : (record.type == 'follow_up' ? 200.0 : 500.0);
+    final opdType = row['opd_type']?.toString() ?? '';
+    return total > 0 ? total : (opdType == 'follow_up' ? 200.0 : 500.0);
   }
 
   void setRevenuePeriod(String period) {
@@ -140,29 +144,37 @@ class DashboardProvider extends ChangeNotifier {
   // ─── Dynamic Revenue Period Split ──────────────────────────
   List<RevenueData> get revenueSplit {
     try {
-      final opdBox = Hive.box<OPDRecordModel>('opd_records');
       final today = DateTime.now();
-      
-      List<OPDRecordModel> filtered = [];
+
+      List<Map<String, dynamic>> filtered = [];
       if (_revenuePeriod == 'Weekly') {
         final startOfWeek = today.subtract(Duration(days: today.weekday));
-        filtered = opdBox.values.where((r) => r.visitDate.isAfter(startOfWeek)).toList();
+        filtered = _allOpdRows.where((r) {
+          final vd = _parseDateTime(r['visit_datetime']);
+          return vd != null && !vd.isBefore(startOfWeek);
+        }).toList();
       } else if (_revenuePeriod == 'Yearly') {
-        filtered = opdBox.values.where((r) => r.visitDate.year == today.year).toList();
-      } else { // Monthly
-        filtered = opdBox.values.where((r) => r.visitDate.year == today.year && r.visitDate.month == today.month).toList();
+        filtered = _allOpdRows.where((r) {
+          final vd = _parseDateTime(r['visit_datetime']);
+          return vd != null && vd.year == today.year;
+        }).toList();
+      } else {
+        filtered = _allOpdRows.where((r) {
+          final vd = _parseDateTime(r['visit_datetime']);
+          return vd != null && vd.year == today.year && vd.month == today.month;
+        }).toList();
       }
 
-      final consultRecords = filtered.where((r) => r.type != 'follow_up');
-      final followRecords = filtered.where((r) => r.type == 'follow_up');
+      final consultRecords = filtered.where((r) => r['opd_type']?.toString() != 'follow_up');
+      final followRecords = filtered.where((r) => r['opd_type']?.toString() == 'follow_up');
 
       double consultRevenue = 0;
       for (final r in consultRecords) {
-        consultRevenue += _extractRecordFee(r);
+        consultRevenue += _extractFeeFromRow(r);
       }
       double followRevenue = 0;
       for (final r in followRecords) {
-        followRevenue += _extractRecordFee(r);
+        followRevenue += _extractFeeFromRow(r);
       }
 
       return [
@@ -190,31 +202,19 @@ class DashboardProvider extends ChangeNotifier {
     return '₹${val.toInt()}';
   }
 
-  // ─── Clinic Overview (Dynamic counts based on selected range) ──
-  int get totalVisits {
-    try {
-      final opdBox = Hive.box<OPDRecordModel>('opd_records');
-      return opdBox.length;
-    } catch (_) {
-      return 0;
-    }
-  }
+  // ─── Clinic Overview ───────────────────────────────────────
+  int get totalVisits => _allOpdRows.length;
 
-  int get newPatients {
-    try {
-      final patientBox = Hive.box<PatientModel>('patients');
-      return patientBox.length;
-    } catch (_) {
-      return 0;
-    }
-  }
+  int get newPatients => _allPatientRows.length;
 
   int get weeklyVisits {
     try {
-      final opdBox = Hive.box<OPDRecordModel>('opd_records');
       final today = DateTime.now();
       final startOfWeek = today.subtract(Duration(days: today.weekday));
-      return opdBox.values.where((r) => !r.visitDate.isBefore(startOfWeek)).length;
+      return _allOpdRows.where((r) {
+        final vd = _parseDateTime(r['visit_datetime']);
+        return vd != null && !vd.isBefore(startOfWeek);
+      }).length;
     } catch (_) {
       return 0;
     }
@@ -222,12 +222,11 @@ class DashboardProvider extends ChangeNotifier {
 
   int get monthlyVisits {
     try {
-      final opdBox = Hive.box<OPDRecordModel>('opd_records');
       final today = DateTime.now();
-      return opdBox.values.where((r) =>
-        r.visitDate.year == today.year &&
-        r.visitDate.month == today.month
-      ).length;
+      return _allOpdRows.where((r) {
+        final vd = _parseDateTime(r['visit_datetime']);
+        return vd != null && vd.year == today.year && vd.month == today.month;
+      }).length;
     } catch (_) {
       return 0;
     }
@@ -235,13 +234,15 @@ class DashboardProvider extends ChangeNotifier {
 
   String get weeklyRevenue {
     try {
-      final opdBox = Hive.box<OPDRecordModel>('opd_records');
       final today = DateTime.now();
       final startOfWeek = today.subtract(Duration(days: today.weekday));
-      final records = opdBox.values.where((r) => !r.visitDate.isBefore(startOfWeek));
+      final records = _allOpdRows.where((r) {
+        final vd = _parseDateTime(r['visit_datetime']);
+        return vd != null && !vd.isBefore(startOfWeek);
+      });
       double total = 0;
       for (final r in records) {
-        total += _extractRecordFee(r);
+        total += _extractFeeFromRow(r);
       }
       return '₹${total.toInt().toString()}';
     } catch (_) {
@@ -251,15 +252,14 @@ class DashboardProvider extends ChangeNotifier {
 
   String get monthlyRevenue {
     try {
-      final opdBox = Hive.box<OPDRecordModel>('opd_records');
       final today = DateTime.now();
-      final records = opdBox.values.where((r) =>
-        r.visitDate.year == today.year &&
-        r.visitDate.month == today.month
-      );
+      final records = _allOpdRows.where((r) {
+        final vd = _parseDateTime(r['visit_datetime']);
+        return vd != null && vd.year == today.year && vd.month == today.month;
+      });
       double total = 0;
       for (final r in records) {
-        total += _extractRecordFee(r);
+        total += _extractFeeFromRow(r);
       }
       return '₹${total.toInt().toString()}';
     } catch (_) {
@@ -269,31 +269,28 @@ class DashboardProvider extends ChangeNotifier {
 
   String get followUpRate {
     try {
-      final opdBox = Hive.box<OPDRecordModel>('opd_records');
-      if (opdBox.isEmpty) return '0%';
-      final followUps = opdBox.values.where((r) => r.type == 'follow_up').length;
-      final rate = (followUps / opdBox.length) * 100;
+      if (_allOpdRows.isEmpty) return '0%';
+      final followUps = _allOpdRows.where((r) => r['opd_type']?.toString() == 'follow_up').length;
+      final rate = (followUps / _allOpdRows.length) * 100;
       return '${rate.toStringAsFixed(0)}%';
     } catch (_) {
       return '0%';
     }
   }
 
-  // ─── Line Chart dynamic weekly spot mapping ────────────────
+  // ─── Line Chart ────────────────────────────────────────────
   List<OpdTrendData> get opdTrendData {
     try {
-      final opdBox = Hive.box<OPDRecordModel>('opd_records');
       final today = DateTime.now();
       final List<OpdTrendData> list = [];
       final weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
       for (int i = 6; i >= 0; i--) {
         final day = today.subtract(Duration(days: i));
-        final count = opdBox.values.where((r) =>
-          r.visitDate.year == day.year &&
-          r.visitDate.month == day.month &&
-          r.visitDate.day == day.day
-        ).length;
+        final count = _allOpdRows.where((r) {
+          final vd = _parseDateTime(r['visit_datetime']);
+          return vd != null && _isSameDay(vd, day);
+        }).length;
 
         list.add(OpdTrendData(day: weekdays[day.weekday % 7], count: count));
       }
@@ -303,20 +300,19 @@ class DashboardProvider extends ChangeNotifier {
     }
   }
 
-  // ─── Dynamic Revenue Pie Chart Data ────────────────────────
+  // ─── Revenue Pie Chart ─────────────────────────────────────
   List<RevenueData> get revenueData {
     try {
-      final opdBox = Hive.box<OPDRecordModel>('opd_records');
-      final consults = opdBox.values.where((r) => r.type != 'follow_up');
-      final follows = opdBox.values.where((r) => r.type == 'follow_up');
+      final consults = _allOpdRows.where((r) => r['opd_type']?.toString() != 'follow_up');
+      final follows = _allOpdRows.where((r) => r['opd_type']?.toString() == 'follow_up');
 
       double consultRevenue = 0;
       for (final r in consults) {
-        consultRevenue += _extractRecordFee(r);
+        consultRevenue += _extractFeeFromRow(r);
       }
       double followRevenue = 0;
       for (final r in follows) {
-        followRevenue += _extractRecordFee(r);
+        followRevenue += _extractFeeFromRow(r);
       }
 
       return [
@@ -334,24 +330,24 @@ class DashboardProvider extends ChangeNotifier {
   double get totalRevenue =>
       revenueData.fold(0, (sum, item) => sum + item.value);
 
-  // ─── Today's Collection list from active OPD visits ───────
+  // ─── Today's Collection ────────────────────────────────────
   List<CollectionItem> get todaysCollection {
     try {
-      final opdBox = Hive.box<OPDRecordModel>('opd_records');
-      final patientBox = Hive.box<PatientModel>('patients');
       final today = DateTime.now();
-
-      final todayRecords = opdBox.values.where((r) =>
-        r.visitDate.year == today.year &&
-        r.visitDate.month == today.month &&
-        r.visitDate.day == today.day
-      ).toList();
+      final todayRecords = _allOpdRows.where((r) {
+        final vd = _parseDateTime(r['visit_datetime']);
+        return vd != null && _isSameDay(vd, today);
+      }).toList();
 
       return todayRecords.map((r) {
-        final p = patientBox.get(r.patientId);
+        final pid = r['patient_id'] as int? ?? 0;
+        final patient = _allPatientRows.cast<Map<String, dynamic>?>().firstWhere(
+          (p) => p?['id'] == pid,
+          orElse: () => null,
+        );
         return CollectionItem(
-          name: p?.name ?? 'Unknown Patient',
-          amount: _extractRecordFee(r).toInt(),
+          name: patient?['full_name']?.toString() ?? 'Unknown Patient',
+          amount: _extractFeeFromRow(r).toInt(),
           mode: 'Cash',
         );
       }).toList();
@@ -359,4 +355,17 @@ class DashboardProvider extends ChangeNotifier {
       return [];
     }
   }
+
+  // ─── Helpers ───────────────────────────────────────────────
+
+  DateTime? _parseDateTime(dynamic value) {
+    if (value == null) return null;
+    return DateTime.tryParse(value.toString());
+  }
+
+  bool _isSameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  String _toStringId(int sqliteId) =>
+      'P${sqliteId.toString().padLeft(3, '0')}';
 }

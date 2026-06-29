@@ -6,8 +6,6 @@ import 'google_auth_service.dart';
 import 'google_drive_sync_service.dart';
 import 'daily_summary_service.dart';
 import 'local_notification_service.dart';
-import '../models/patient_model.dart';
-import '../models/opd_record_model.dart';
 import '../models/appointment_model.dart';
 
 const String _dailyBackupTask = 'dailyBackup';
@@ -23,12 +21,8 @@ void callbackDispatcher() {
       WidgetsFlutterBinding.ensureInitialized();
       await Hive.initFlutter();
 
-      Hive.registerAdapter(PatientModelAdapter());
-      Hive.registerAdapter(OPDRecordModelAdapter());
       Hive.registerAdapter(AppointmentModelAdapter());
 
-      await Hive.openBox<PatientModel>('patients');
-      await Hive.openBox<OPDRecordModel>('opd_records');
       await Hive.openBox<AppointmentModel>('appointments');
       await Hive.openBox('drafts');
       await Hive.openBox('day_notes');

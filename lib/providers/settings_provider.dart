@@ -5,8 +5,11 @@ import 'package:google_sign_in/google_sign_in.dart';
 import '../theme/app_theme.dart';
 import '../services/google_auth_service.dart';
 import '../services/google_drive_sync_service.dart';
+import '../repositories/clinic_settings_repository.dart';
 
 class SettingsProvider extends ChangeNotifier {
+  final ClinicSettingsRepository _settingsRepo = ClinicSettingsRepository();
+
   bool _darkMode = false;
 
   // Doctor Profile
@@ -211,24 +214,44 @@ class SettingsProvider extends ChangeNotifier {
 
   Future<void> _loadSettings() async {
     try {
+      final row = await _settingsRepo.getFirst();
+      if (row != null) {
+        _doctorName = row['doctor_name'] as String? ?? 'Dr. Rajas Gavas';
+        _doctorEmail = row['doctor_email'] as String? ?? 'dr.rajas@gmail.com';
+        _doctorPhone = row['doctor_contact'] as String? ?? '+91 98765 43210';
+        _doctorLicense = row['doctor_license_no'] as String? ?? 'I-107200-A';
+        _doctorProfileImage = row['doctor_photo_path'] as String? ?? '';
+        _clinicName = row['clinic_name'] as String? ?? 'Shree Clinic';
+        _clinicPhone = row['clinic_phone'] as String? ?? '+91 22 2345 6789';
+        _clinicAddress = row['clinic_address'] as String? ?? 'Suite 101, Medical Plaza, Mumbai';
+        _clinicHours = row['operating_hours'] as String? ?? '09:00 AM - 01:00 PM, 04:00 PM - 08:00 PM';
+        _clinicWebsite = row['website'] as String? ?? '';
+      }
+
       final prefs = await SharedPreferences.getInstance();
       _darkMode = prefs.getBool('darkMode') ?? false;
       AppTheme.isDarkMode = _darkMode;
-      _doctorName = prefs.getString('doctorName') ?? 'Dr. Rajas Gavas';
       _doctorSpecialty = prefs.getString('doctorSpecialty') ?? 'General Physician';
-      _doctorLicense = prefs.getString('doctorLicense') ?? 'I-107200-A';
-      _doctorEmail = prefs.getString('doctorEmail') ?? 'dr.rajas@gmail.com';
-      _doctorPhone = prefs.getString('doctorPhone') ?? '+91 98765 43210';
-      _doctorProfileImage = prefs.getString('doctorProfileImage') ?? '';
-      _clinicName = prefs.getString('clinicName') ?? 'Shree Clinic';
-      _clinicPhone = prefs.getString('clinicPhone') ?? '+91 22 2345 6789';
-      _clinicAddress = prefs.getString('clinicAddress') ?? 'Suite 101, Medical Plaza, Mumbai';
-      _clinicHours = prefs.getString('clinicHours') ?? '09:00 AM - 01:00 PM, 04:00 PM - 08:00 PM';
-      _clinicWebsite = prefs.getString('clinicWebsite') ?? '';
       notifyListeners();
     } catch (_) {
       // Silently handle — settings will use defaults
     }
+  }
+
+  Future<void> _saveClinicSettingsRow() async {
+    await _settingsRepo.upsert({
+      'doctor_name': _doctorName,
+      'doctor_email': _doctorEmail,
+      'doctor_contact': _doctorPhone,
+      'doctor_license_no': _doctorLicense,
+      'doctor_photo_path': _doctorProfileImage,
+      'clinic_name': _clinicName,
+      'clinic_phone': _clinicPhone,
+      'clinic_address': _clinicAddress,
+      'website': _clinicWebsite,
+      'operating_hours': _clinicHours,
+      'updated_at': DateTime.now().toIso8601String(),
+    });
   }
 
   Future<void> toggleDarkMode() async {
@@ -253,19 +276,15 @@ class SettingsProvider extends ChangeNotifier {
     _doctorPhone = phone;
     notifyListeners();
 
+    await _saveClinicSettingsRow();
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('doctorName', name);
     await prefs.setString('doctorSpecialty', specialty);
-    await prefs.setString('doctorLicense', license);
-    await prefs.setString('doctorEmail', email);
-    await prefs.setString('doctorPhone', phone);
   }
 
   Future<void> updateDoctorProfileImage(String base64Image) async {
     _doctorProfileImage = base64Image;
     notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('doctorProfileImage', base64Image);
+    await _saveClinicSettingsRow();
   }
 
   Future<void> updateClinicInfo({
@@ -282,12 +301,7 @@ class SettingsProvider extends ChangeNotifier {
     _clinicWebsite = website;
     notifyListeners();
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('clinicName', name);
-    await prefs.setString('clinicPhone', phone);
-    await prefs.setString('clinicAddress', address);
-    await prefs.setString('clinicHours', hours);
-    await prefs.setString('clinicWebsite', website);
+    await _saveClinicSettingsRow();
   }
 
   @override

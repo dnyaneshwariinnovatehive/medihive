@@ -642,6 +642,13 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
           label: 'Monthly Visits',
           onTap: () => _showRevenueSheet(context, 'This Month', dashboard.monthlyRevenue),
         )),
+        const SizedBox(width: 8),
+        Expanded(child: _buildVisitCard(
+          icon: Icons.repeat,
+          value: dashboard.followUpsDue.toString(),
+          label: 'Follow-ups Due',
+          onTap: () => context.go('/app/calendar'),
+        )),
       ],
     );
   }

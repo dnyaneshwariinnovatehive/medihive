@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:hive_flutter/hive_flutter.dart';
 import 'package:provider/provider.dart';
 import '../../theme/app_theme.dart';
-import '../../models/patient_model.dart';
 import '../../providers/patient_provider.dart';
+import '../../repositories/patient_repository.dart';
+import '../../repositories/sync_queue_repository.dart';
 import '../../utils/helpers.dart';
+import '../../utils/sync_id_generator.dart';
+import '../../services/sync_manager.dart';
 import '../../widgets/section_card.dart';
 import '../../widgets/standard_header.dart';
 
@@ -28,7 +30,7 @@ class _PatientEditScreenState extends State<PatientEditScreen> {
   String _bloodGroup = 'O+';
   bool _isLoading = true;
   bool _isSaving = false;
-  PatientModel? _patient;
+  Map<String, dynamic>? _patientRow;
 
   final List<String> _genders = ['Male', 'Female', 'Other'];
   final List<String> _bloodGroups = [
@@ -41,21 +43,29 @@ class _PatientEditScreenState extends State<PatientEditScreen> {
     _loadPatient();
   }
 
-  void _loadPatient() {
-    final box = Hive.box<PatientModel>('patients');
-    final patient = box.get(widget.patientId);
+  int _toSqliteId(String hiveId) {
+    final match = RegExp(r'(\d+)').firstMatch(hiveId);
+    if (match != null) return int.parse(match.group(1)!);
+    return 0;
+  }
+
+  Future<void> _loadPatient() async {
+    final repo = PatientRepository();
+    final sqliteId = _toSqliteId(widget.patientId);
+    final patient = await repo.getById(sqliteId);
+    if (!mounted) return;
     if (patient == null) {
       setState(() => _isLoading = false);
       return;
     }
-    _patient = patient;
-    _nameController = TextEditingController(text: patient.name);
-    _ageController = TextEditingController(text: patient.age.toString());
-    _mobileController = TextEditingController(text: patient.mobile);
-    _addressController = TextEditingController(text: patient.address);
-    _dobController = TextEditingController(text: patient.dob);
-    _gender = patient.gender;
-    _bloodGroup = patient.bloodGroup;
+    _patientRow = patient;
+    _nameController = TextEditingController(text: patient['full_name'] as String? ?? '');
+    _ageController = TextEditingController(text: patient['age']?.toString() ?? '');
+    _mobileController = TextEditingController(text: patient['mobile_number'] as String? ?? '');
+    _addressController = TextEditingController(text: patient['address'] as String? ?? '');
+    _dobController = TextEditingController(text: patient['dob'] as String? ?? '');
+    _gender = patient['gender'] as String? ?? 'Male';
+    _bloodGroup = patient['blood_group'] as String? ?? 'O+';
     setState(() => _isLoading = false);
   }
 
@@ -74,24 +84,41 @@ class _PatientEditScreenState extends State<PatientEditScreen> {
     setState(() => _isSaving = true);
 
     try {
-      final box = Hive.box<PatientModel>('patients');
-      final updated = _patient!.copyWith(
-        name: _nameController.text.trim(),
-        age: int.tryParse(_ageController.text.trim()) ?? _patient!.age,
-        mobile: Helpers.normalizePhone(_mobileController.text.trim()),
-        address: _addressController.text.trim(),
-        dob: _dobController.text.trim(),
-        gender: _gender,
-        bloodGroup: _bloodGroup,
-        updatedAt: DateTime.now(),
-        isSynced: false,
-      );
-      box.put(updated.id, updated);
+      final repo = PatientRepository();
+      final syncQueueRepo = SyncQueueRepository();
+      final sqliteId = _toSqliteId(widget.patientId);
+
+      final name = _nameController.text.trim();
+      final age = int.tryParse(_ageController.text.trim()) ?? (_patientRow?['age'] as int? ?? 0);
+
+      await repo.update(sqliteId, {
+        'full_name': name,
+        'age': age,
+        'mobile_number': Helpers.normalizePhone(_mobileController.text.trim()),
+        'address': _addressController.text.trim(),
+        'dob': _dobController.text.trim(),
+        'gender': _gender,
+        'blood_group': _bloodGroup,
+      });
+
+      await syncQueueRepo.insert({
+        'id': SyncIdGenerator.nextId(),
+        'entity_type': 'patient',
+        'entity_id': widget.patientId,
+        'status': 'pending',
+        'retry_count': 0,
+        'created_at': DateTime.now().toIso8601String(),
+      });
+      Future.microtask(() {
+        print('FORCING IMMEDIATE SYNC');
+        SyncManager().forceSyncNow();
+      });
+
       if (mounted) {
         context.read<PatientProvider>().loadPatients();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Patient ${updated.name} updated'),
+            content: Text('Patient $name updated'),
             backgroundColor: AppTheme.success,
           ),
         );
@@ -123,7 +150,7 @@ class _PatientEditScreenState extends State<PatientEditScreen> {
             const SliverFillRemaining(
               child: Center(child: CircularProgressIndicator()),
             )
-          else if (_patient == null)
+          else if (_patientRow == null)
             SliverFillRemaining(
               child: Center(
                 child: Column(

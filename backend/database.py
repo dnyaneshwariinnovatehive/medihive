@@ -49,6 +49,7 @@ def init_db():
             follow_up_reason    TEXT DEFAULT '',
             next_visit          TEXT DEFAULT '',
             blood_group         TEXT DEFAULT '',
+            image_links         TEXT DEFAULT '',
             created_at          TEXT NOT NULL,
             updated_at          TEXT NOT NULL,
             is_synced           INTEGER DEFAULT 0,
@@ -88,6 +89,12 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_opd_visit   ON opd_records(visit_date);
         CREATE INDEX IF NOT EXISTS idx_appt_date   ON appointments(date_time);
     """)
+
+    # Migration: add image_links column for existing databases
+    try:
+        cursor.execute("ALTER TABLE opd_records ADD COLUMN image_links TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass  # column already exists
 
     conn.commit()
     conn.close()

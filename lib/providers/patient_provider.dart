@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:hive/hive.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/opd_form_data.dart';
 import '../models/patient.dart';
 import '../models/patient_model.dart';
-import '../models/opd_record_model.dart';
+import '../repositories/patient_repository.dart';
+import '../repositories/sync_queue_repository.dart';
+import '../utils/sync_id_generator.dart';
+import '../services/sync_manager.dart';
+import '../repositories/opd_record_repository.dart';
 
 class PatientProvider extends ChangeNotifier {
   Timer? _debounceTimer;
@@ -13,7 +16,10 @@ class PatientProvider extends ChangeNotifier {
   bool isSearching = false;
   List<PatientModel> _filteredPatients = [];
   String _sortFilter = 'recent_visit';
-  StreamSubscription? _patientSubscription;
+
+  final PatientRepository _repo = PatientRepository();
+  final SyncQueueRepository _syncQueueRepo = SyncQueueRepository();
+  List<Map<String, dynamic>> _allPatientRows = [];
 
   String get sortFilter => _sortFilter;
   void setSortFilter(String val) {
@@ -27,7 +33,7 @@ class PatientProvider extends ChangeNotifier {
       : _filteredPatients;
 
   List<PatientModel> get _sortedPatients {
-    final list = Hive.box<PatientModel>('patients').values.toList();
+    final list = _allPatientRows.map(_rowToModel).toList();
     switch (_sortFilter) {
       case 'oldest_visit':
         list.sort((a, b) =>
@@ -55,14 +61,10 @@ class PatientProvider extends ChangeNotifier {
 
   PatientProvider() {
     loadPatients();
-    _patientSubscription = Hive.box<PatientModel>('patients').watch().listen((_) {
-      loadPatients();
-    });
   }
 
   @override
   void dispose() {
-    _patientSubscription?.cancel();
     _debounceTimer?.cancel();
     super.dispose();
   }
@@ -85,8 +87,8 @@ class PatientProvider extends ChangeNotifier {
   void _performSearch(String query) {
     final q = query.toLowerCase();
     final qNum = query.replaceAll(RegExp(r'[^0-9]'), '');
-    _filteredPatients = Hive.box<PatientModel>('patients')
-      .values
+    _filteredPatients = _allPatientRows
+      .map(_rowToModel)
       .where((p) {
         final pNum = p.id.toString().replaceAll(RegExp(r'[^0-9]'), '');
         return p.name.toLowerCase().contains(q) ||
@@ -103,24 +105,26 @@ class PatientProvider extends ChangeNotifier {
   String get searchQuery => _searchQuery;
   List<Patient> _patients = [];
 
-  void loadPatients() {
+  Future<void> loadPatients() async {
     try {
-      final box = Hive.box<PatientModel>('patients');
-      _patients = box.values.map((p) {
+      _allPatientRows = await _repo.getAll();
+      await _populateVisitCache();
+      _patients = _allPatientRows.map((row) {
+        final model = _rowToModel(row);
         return Patient(
-          id: p.id,
-          name: p.name,
-          age: p.age,
-          gender: p.gender.isNotEmpty && p.gender != 'Not Specified' ? p.gender : 'Unknown',
-          mobile: p.mobile,
-          lastVisit: (p.lastVisitDate ?? p.createdAt).toString().split(' ')[0],
-          dob: p.dob,
-          diagnosis: p.lastDiagnosis ?? '',
+          id: model.id,
+          name: model.name,
+          age: model.age,
+          gender: model.gender.isNotEmpty && model.gender != 'Not Specified' ? model.gender : 'Unknown',
+          mobile: model.mobile,
+          lastVisit: (model.lastVisitDate ?? model.createdAt).toString().split(' ')[0],
+          dob: model.dob,
+          diagnosis: model.lastDiagnosis ?? '',
         );
       }).toList();
-      // Sort by most recent visit descending
       _patients.sort((a, b) => b.lastVisit.compareTo(a.lastVisit));
     } catch (_) {
+      _allPatientRows = [];
       _patients = [];
     }
     notifyListeners();
@@ -169,14 +173,19 @@ class PatientProvider extends ChangeNotifier {
 
   Future<void> deletePatientAndRecords(String patientId) async {
     try {
-      final patientBox = Hive.box<PatientModel>('patients');
-      final opdBox = Hive.box<OPDRecordModel>('opd_records');
-      final opdRecords = opdBox.values.where((r) => r.patientId == patientId).toList();
-      for (final record in opdRecords) {
-        await opdBox.delete(record.id);
+      final sqliteId = _toSqliteId(patientId);
+      final opdRepo = OpdRecordRepository();
+      final records = await opdRepo.getByPatientId(sqliteId);
+      for (final record in records) {
+        await opdRepo.delete(record['id'] as int);
       }
-      await patientBox.delete(patientId);
-      loadPatients();
+      await _repo.delete(sqliteId);
+      await _addSyncQueueEntry('patient', patientId);
+      Future.microtask(() {
+        print('FORCING IMMEDIATE SYNC');
+        SyncManager().forceSyncNow();
+      });
+      await loadPatients();
     } catch (_) {}
   }
 
@@ -186,19 +195,10 @@ class PatientProvider extends ChangeNotifier {
 
   Future<String> generateNextPatientId() async {
     final prefs = await SharedPreferences.getInstance();
-    final box = Hive.box<PatientModel>('patients');
-    int maxExisting = 0;
-    for (final patient in box.values) {
-      if (patient.id.startsWith('P')) {
-        final val = int.tryParse(patient.id.substring(1));
-        if (val != null && val > maxExisting) {
-          maxExisting = val;
-        }
-      }
-    }
+    final maxId = await _repo.getMaxId();
     int counter = prefs.getInt('patient_id_counter') ?? 0;
-    if (counter < maxExisting) {
-      counter = maxExisting;
+    if (counter < maxId) {
+      counter = maxId;
     }
     counter++;
     await prefs.setInt('patient_id_counter', counter);
@@ -217,75 +217,119 @@ class PatientProvider extends ChangeNotifier {
   }
 
   Future<void> addPatientFromOpd(OpdFormData formData) async {
-    final box = Hive.box<PatientModel>('patients');
-    
-    PatientModel? existingPatient;
-    if (formData.patientId.isNotEmpty) {
-      existingPatient = box.get(formData.patientId);
-    }
-
     final ageFromDob = _calculateAgeFromDob(formData.dob);
 
-    if (existingPatient != null) {
-      formData.patientId = existingPatient.id;
-      final updatedPatient = existingPatient.copyWith(
-        name: formData.name.isNotEmpty ? formData.name : existingPatient.name,
-        dob: formData.dob.isNotEmpty ? formData.dob : existingPatient.dob,
-        age: ageFromDob > 0 ? ageFromDob : existingPatient.age,
-        gender: formData.gender.isNotEmpty ? formData.gender : existingPatient.gender,
-        bloodGroup: formData.bloodGroup.isNotEmpty ? formData.bloodGroup : existingPatient.bloodGroup,
-        mobile: formData.mobile.isNotEmpty ? formData.mobile : existingPatient.mobile,
-        address: formData.address.isNotEmpty ? formData.address : existingPatient.address,
-        updatedAt: DateTime.now(),
-        isSynced: false,
-      );
-      box.put(updatedPatient.id, updatedPatient);
-    } else {
-      final nextId = await generateNextPatientId();
-      formData.patientId = nextId;
-
-      final newPatient = PatientModel(
-        id: nextId,
-        name: formData.name.isEmpty ? 'Unknown' : formData.name,
-        dob: formData.dob.isEmpty ? DateTime.now().toIso8601String().split('T')[0] : formData.dob,
-        age: ageFromDob > 0 ? ageFromDob : 0,
-        gender: formData.gender.isNotEmpty ? formData.gender : 'Not Specified',
-        bloodGroup: formData.bloodGroup.isNotEmpty ? formData.bloodGroup : 'Not Specified',
-        mobile: formData.mobile,
-        address: formData.address.isEmpty ? 'Not specified' : formData.address,
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
-        isSynced: false,
-      );
-      box.put(newPatient.id, newPatient);
+    if (formData.patientId.isNotEmpty) {
+      final existingId = _toSqliteId(formData.patientId);
+      final existing = await _repo.getById(existingId);
+      if (existing != null) {
+        await _repo.update(existingId, {
+          'full_name': formData.name.isNotEmpty ? formData.name : existing['full_name'],
+          'mobile_number': formData.mobile.isNotEmpty ? formData.mobile : existing['mobile_number'],
+          'gender': formData.gender.isNotEmpty ? formData.gender : existing['gender'],
+          'dob': formData.dob.isNotEmpty ? formData.dob : existing['dob'],
+          'age': ageFromDob > 0 ? ageFromDob : existing['age'],
+          'blood_group': formData.bloodGroup.isNotEmpty ? formData.bloodGroup : existing['blood_group'],
+          'address': formData.address.isNotEmpty ? formData.address : existing['address'],
+        });
+        await _addSyncQueueEntry('patient', formData.patientId);
+        await loadPatients();
+        return;
+      }
     }
 
-    loadPatients();
+    final nextId = await generateNextPatientId();
+    formData.patientId = nextId;
+    final sqliteId = _toSqliteId(nextId);
+
+    await _repo.insert({
+      'id': sqliteId,
+      'full_name': formData.name.isEmpty ? 'Unknown' : formData.name,
+      'mobile_number': formData.mobile,
+      'alternate_mobile': null,
+      'gender': formData.gender.isNotEmpty ? formData.gender : 'Not Specified',
+      'dob': formData.dob.isEmpty ? DateTime.now().toIso8601String().split('T')[0] : formData.dob,
+      'age': ageFromDob > 0 ? ageFromDob : 0,
+      'blood_group': formData.bloodGroup.isNotEmpty ? formData.bloodGroup : 'Not Specified',
+      'address': formData.address.isEmpty ? 'Not specified' : formData.address,
+      'created_at': DateTime.now().toIso8601String(),
+    });
+
+    await _addSyncQueueEntry('patient', nextId);
+    await loadPatients();
+  }
+
+  Future<void> _addSyncQueueEntry(String entityType, String entityId) async {
+    try {
+      await _syncQueueRepo.insert({
+        'id': SyncIdGenerator.nextId(),
+        'entity_type': entityType,
+        'entity_id': entityId,
+        'status': 'pending',
+        'retry_count': 0,
+        'created_at': DateTime.now().toIso8601String(),
+      });
+    } catch (e, st) {
+      debugPrint('SYNC QUEUE INSERT FAILED: $e');
+      debugPrintStack(stackTrace: st);
+      rethrow;
+    }
+  }
+
+  Future<void> _populateVisitCache() async {
+    try {
+      final opdRepo = OpdRecordRepository();
+      final allOpd = await opdRepo.getAll();
+      final latestByPatient = <int, Map<String, dynamic>>{};
+      for (final row in allOpd) {
+        final pid = row['patient_id'] as int;
+        final existing = latestByPatient[pid];
+        final visitDt = row['visit_datetime'] as String? ?? '';
+        if (existing == null || visitDt.compareTo(existing['visit_datetime'] as String? ?? '') > 0) {
+          latestByPatient[pid] = row;
+        }
+      }
+      _lastVisitCache.clear();
+      _lastDiagCache.clear();
+      for (final entry in latestByPatient.entries) {
+        final hiveId = _toStringId(entry.key);
+        _lastVisitCache[hiveId] = DateTime.tryParse(entry.value['visit_datetime'] as String? ?? '');
+        _lastDiagCache[hiveId] = entry.value['diagnosis'] as String?;
+      }
+    } catch (_) {}
+  }
+
+  int _toSqliteId(String hiveId) {
+    final match = RegExp(r'(\d+)').firstMatch(hiveId);
+    if (match != null) return int.parse(match.group(1)!);
+    return 0;
+  }
+
+  String _toStringId(int sqliteId) {
+    return 'P${sqliteId.toString().padLeft(3, '0')}';
+  }
+
+  PatientModel _rowToModel(Map<String, dynamic> row) {
+    return PatientModel(
+      id: _toStringId(row['id'] as int),
+      name: row['full_name'] as String? ?? '',
+      dob: row['dob'] as String? ?? '',
+      age: row['age'] as int? ?? 0,
+      mobile: row['mobile_number'] as String? ?? '',
+      address: row['address'] as String? ?? '',
+      createdAt: DateTime.tryParse(row['created_at'] as String? ?? '') ?? DateTime.now(),
+      updatedAt: DateTime.now(),
+      isSynced: false,
+      gender: row['gender'] as String? ?? 'Not Specified',
+      bloodGroup: row['blood_group'] as String? ?? 'Not Specified',
+    );
   }
 }
 
-extension PatientModelExtension on PatientModel {
-  DateTime? get lastVisitDate {
-    try {
-      final opdBox = Hive.box<OPDRecordModel>('opd_records');
-      final records = opdBox.values.where((r) => r.patientId == id).toList();
-      if (records.isEmpty) return null;
-      records.sort((a, b) => b.visitDate.compareTo(a.visitDate));
-      return records.first.visitDate;
-    } catch (_) {
-      return null;
-    }
-  }
+final Map<String, DateTime?> _lastVisitCache = {};
+final Map<String, String?> _lastDiagCache = {};
 
-  String? get lastDiagnosis {
-    try {
-      final opdBox = Hive.box<OPDRecordModel>('opd_records');
-      final records = opdBox.values.where((r) => r.patientId == id).toList();
-      if (records.isEmpty) return null;
-      records.sort((a, b) => b.visitDate.compareTo(a.visitDate));
-      return records.first.diagnosis;
-    } catch (_) {
-      return null;
-    }
-  }
+extension PatientModelExtension on PatientModel {
+  DateTime? get lastVisitDate => _lastVisitCache[id];
+  String? get lastDiagnosis => _lastDiagCache[id];
 }

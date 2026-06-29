@@ -22,9 +22,9 @@ import 'services/local_notification_service.dart';
 import 'services/notification_service.dart';
 import 'services/firebase_messaging_service.dart';
 import 'services/background_backup_handler.dart';
+import 'services/data_migration_service.dart';
+import 'database/database_helper.dart';
 
-import 'models/patient_model.dart';
-import 'models/opd_record_model.dart';
 import 'models/appointment_model.dart';
 
 import 'screens/splash_screen.dart';
@@ -51,6 +51,17 @@ import 'screens/chatbot/chatbot_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  print('MAIN START');
+
+  try {
+    print('CREATING SYNCMANAGER');
+    SyncManager();
+    print('SYNCMANAGER CREATED');
+  } catch (e, st) {
+    print('SYNCMANAGER FAILED: $e');
+    print(st);
+  }
 
   await dotenv.load(fileName: "assets/.env");
 
@@ -103,32 +114,40 @@ void main() async {
     await Hive.initFlutter();
     
     // Register adapters
-    Hive.registerAdapter(PatientModelAdapter());
-    Hive.registerAdapter(OPDRecordModelAdapter());
     Hive.registerAdapter(AppointmentModelAdapter());
     
     // Open boxes
-    await Hive.openBox<PatientModel>('patients');
-    await Hive.openBox<OPDRecordModel>('opd_records');
     await Hive.openBox<AppointmentModel>('appointments');
     await Hive.openBox('drafts');
     await Hive.openBox('day_notes');
     await Hive.openBox('opd_documents');
-    // One-time data reset (runs only on first launch after this patch)
-    final prefs = await SharedPreferences.getInstance();
-    if (prefs.getBool('data_reset_done') != true) {
-      await Hive.box<PatientModel>('patients').clear();
-      await Hive.box<OPDRecordModel>('opd_records').clear();
-      await Hive.box<AppointmentModel>('appointments').clear();
-      await Hive.box('drafts').clear();
-      await prefs.setBool('data_reset_done', true);
+    } catch (e) {
+      // Hive initialization failure - log and continue with best-effort
+      debugPrint('Hive initialization error: $e');
     }
-  } catch (e) {
-    // Hive initialization failure - log and continue with best-effort
-    debugPrint('Hive initialization error: $e');
-  }
 
-  // Initialize local notification services
+    // Initialize SQLite database
+    if (!kIsWeb) {
+      try {
+        await DatabaseHelper().database;
+        debugPrint('SQLite database initialized successfully');
+      } catch (e) {
+        debugPrint('SQLite initialization error: $e');
+      }
+    }
+
+    // One-time Hive → SQLite migration
+    final migrationPrefs = await SharedPreferences.getInstance();
+    if (!kIsWeb && migrationPrefs.getBool('hive_sqlite_migration_done') != true) {
+      try {
+        final result = await DataMigrationService().migrate();
+        debugPrint('Migration complete: ${result.totalSqlite} rows migrated');
+      } catch (e) {
+        debugPrint('Migration error: $e');
+      }
+    }
+
+    // Initialize local notification services
   if (!kIsWeb) {
     try {
       await LocalNotificationService().init();
@@ -141,6 +160,7 @@ void main() async {
   // Schedule background tasks (native only)
   if (!kIsWeb) {
     try {
+      print('CREATING SYNCMANAGER');
       final syncManager = SyncManager();
       await syncManager.scheduleDailyBackup(const TimeOfDay(hour: 2, minute: 0));
     } catch (e) {
@@ -176,7 +196,10 @@ class MediHiveApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => OpdProvider()),
         ChangeNotifierProvider(create: (_) => AppointmentProvider()),
         ChangeNotifierProvider(create: (_) => SettingsProvider()),
-        ChangeNotifierProvider(create: (_) => SyncManager()),
+        ChangeNotifierProvider(create: (_) {
+          print('CREATING SYNCMANAGER');
+          return SyncManager();
+        }),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
       ],
       child: Consumer<SettingsProvider>(

@@ -46,3 +46,8 @@ app.*.map.json
 
 # Environment variables (contains actual credentials)
 /assets/.env
+
+# Google credentials and tokens (secrets - never commit)
+credentials/
+drive_token.json
+oauth_credentials.json

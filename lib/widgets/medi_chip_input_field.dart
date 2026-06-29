@@ -51,13 +51,13 @@ class _MediChipInputFieldState extends State<MediChipInputField> {
   }
 
   @override
-  void dispose() {
-    _removeOverlay();
-    _controller.dispose();
-    _focusNode.removeListener(_onFocusChange);
-    _focusNode.dispose();
-    super.dispose();
-  }
+void dispose() {
+  _focusNode.removeListener(_onFocusChange);
+  _removeOverlay();
+  _controller.dispose();
+  _focusNode.dispose();
+  super.dispose();
+}
 
   void _parseInitialValue() {
     if (widget.initialValue.trim().isEmpty) {
@@ -206,14 +206,9 @@ class _MediChipInputFieldState extends State<MediChipInputField> {
   }
 
   void _removeOverlay() {
-    _overlayEntry?.remove();
-    _overlayEntry = null;
-    if (mounted) {
-      setState(() {
-        _hasOpened = false;
-      });
-    }
-  }
+  _overlayEntry?.remove();
+  _overlayEntry = null;
+}
 
   @override
   Widget build(BuildContext context) {

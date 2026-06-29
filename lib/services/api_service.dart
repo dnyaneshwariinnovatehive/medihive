@@ -1,12 +1,14 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class ApiService {
-  static String get baseUrl => dotenv.env['API_BASE_URL'] ?? 'http://192.168.1.100:5000/api';
-
+static String get baseUrl =>
+    dotenv.env['API_BASE_URL'] ??
+    'http://192.168.31.91:5000/api';
   static String? _token;
 
   static Future<void> _loadToken() async {
@@ -180,7 +182,7 @@ class ApiService {
       Uri.parse('$baseUrl/sync/pull'),
       headers: _headers(),
       body: jsonEncode({'last_sync': lastSync}),
-    );
+    ).timeout(const Duration(seconds: 30));
     return _handleResponse(res);
   }
 
@@ -190,6 +192,8 @@ class ApiService {
     required List<Map<String, dynamic>> appointments,
   }) async {
     await _loadToken();
+    print("BASE URL = $baseUrl");
+    debugPrint('SYNC API syncPush: token=($_token != null) url=$baseUrl/sync/push patients=${patients.length} opdRecords=${opdRecords.length} appointments=${appointments.length}');
     final res = await http.post(
       Uri.parse('$baseUrl/sync/push'),
       headers: _headers(),
@@ -198,8 +202,37 @@ class ApiService {
         'opd_records': opdRecords,
         'appointments': appointments,
       }),
-    );
+    ).timeout(const Duration(seconds: 120));
+    debugPrint('SYNC API syncPush response: status=${res.statusCode}');
     return _handleResponse(res);
+  }
+
+  static Future<Map<String, dynamic>> pushImages(
+    String opdId,
+    List<File> images,
+  ) async {
+    await _loadToken();
+
+    final uri = Uri.parse('$baseUrl/sync/push/images/$opdId');
+    final request = http.MultipartRequest('POST', uri);
+    request.headers['Authorization'] = 'Bearer $_token';
+
+    for (final image in images) {
+      request.files.add(
+        await http.MultipartFile.fromPath('images', image.path),
+      );
+    }
+
+    final streamedResponse = await request.send().timeout(const Duration(seconds: 120));
+    final response = await http.Response.fromStream(streamedResponse).timeout(const Duration(seconds: 120));
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    throw ApiException(
+      response.statusCode,
+      jsonDecode(response.body)['error']?.toString() ?? 'Image upload failed',
+    );
   }
 
   static Future<void> updateFcmToken(String token) async {

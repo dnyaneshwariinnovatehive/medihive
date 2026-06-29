@@ -22,8 +22,8 @@ import '../../utils/constants.dart';
 import '../../utils/helpers.dart';
 import '../../utils/medical_data.dart';
 import 'dart:io';
-import 'package:hive/hive.dart';
 import 'package:image_picker/image_picker.dart';
+import '../../repositories/opd_record_repository.dart';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 
@@ -352,6 +352,7 @@ class _OpdRegistrationScreenState extends State<OpdRegistrationScreen> {
                           } else {
                             if (_isSubmitting) return;
                             setState(() => _isSubmitting = true);
+                            print('OPD SAVE START');
                             try {
                               await context
                                   .read<PatientProvider>()
@@ -362,24 +363,22 @@ class _OpdRegistrationScreenState extends State<OpdRegistrationScreen> {
                               // Find existing record ID if editing
                               String? existingId;
                               if (widget.editPatientId != null) {
-                                final opdBox = Hive.box('opd_records');
-                                final records = opdBox.values.where((r) {
-                                  final rec = r as dynamic;
-                                  return rec.patientId == widget.editPatientId;
-                                }).toList();
-                                if (records.isNotEmpty) {
-                                  records.sort((a, b) {
-                                    final aDate =
-                                        (a as dynamic).visitDate as DateTime;
-                                    final bDate =
-                                        (b as dynamic).visitDate as DateTime;
-                                    return bDate.compareTo(aDate);
-                                  });
-                                  existingId = (records.first as dynamic).id
-                                      ?.toString();
+                                final sqliteId = int.tryParse(
+                                  widget.editPatientId!.replaceAll(
+                                    RegExp(r'[^0-9]'), '',
+                                  ),
+                                ) ?? 0;
+                                if (sqliteId != 0) {
+                                  final opdRepo = OpdRecordRepository();
+                                  final records = await opdRepo
+                                      .getByPatientId(sqliteId);
+                                  if (records.isNotEmpty) {
+                                    existingId = records.first['opd_id']
+                                        ?.toString();
+                                  }
                                 }
                               }
-                              await opd.submitRecord(
+                              final success = await opd.submitRecord(
                                 dashboardProvider: context
                                     .read<DashboardProvider>(),
                                 appointmentProvider: context
@@ -387,6 +386,18 @@ class _OpdRegistrationScreenState extends State<OpdRegistrationScreen> {
                                 existingRecordId: existingId,
                                 documentBytes: _documentBytes,
                               );
+                              if (!success) {
+                                setState(() => _isSubmitting = false);
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Failed to save record. Please try again.'),
+                                      backgroundColor: Colors.red,
+                                    ),
+                                  );
+                                }
+                                return;
+                              }
                               context.read<NotificationProvider>().addNotification(
                                 'OPD Record Saved',
                                 'Patient $patientNameForNotification record saved',

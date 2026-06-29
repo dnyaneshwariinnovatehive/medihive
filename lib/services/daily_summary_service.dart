@@ -1,9 +1,11 @@
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:hive/hive.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest.dart' as tz_data;
 import '../models/appointment_model.dart';
+import '../repositories/calendar_notes_repository.dart';
 import 'local_notification_service.dart' as local_notif;
 import 'shared_notification_plugin.dart';
 
@@ -31,21 +33,27 @@ class DailySummaryService {
     }
   }
 
-  static List<String> _notesForDate(int year, int month, int day) {
+  static String _hiveKeyToSqlDate(int year, int month, int day) {
+    return '${year.toString().padLeft(4, '0')}-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}';
+  }
+
+  static Future<List<String>> _notesForDate(int year, int month, int day) async {
     try {
-      final box = Hive.box('day_notes');
-      final key = '$year-$month-$day';
-      final val = box.get(key);
-      if (val == null) return [];
-      if (val is String) return [val];
-      if (val is List) return val.cast<String>();
-      return [];
+      final repo = CalendarNotesRepository();
+      final sqlDate = _hiveKeyToSqlDate(year, month, day);
+      final row = await repo.getByDate(sqlDate);
+      if (row == null) return [];
+      final noteText = row['note_text'] as String? ?? '';
+      if (noteText.isEmpty) return [];
+      final decoded = jsonDecode(noteText);
+      if (decoded is List) return decoded.cast<String>();
+      return [noteText];
     } catch (_) {
       return [];
     }
   }
 
-  static List<String> _todayNotes() => _notesForDate(
+  static Future<List<String>> _todayNotes() => _notesForDate(
     DateTime.now().year, DateTime.now().month, DateTime.now().day,
   );
 
@@ -77,7 +85,7 @@ class DailySummaryService {
     if (kIsWeb) return;
 
     final followUpCount = _todayFollowUpCount();
-    final notes = _todayNotes();
+    final notes = await _todayNotes();
 
     final buffer = StringBuffer();
     if (followUpCount > 0) {
@@ -103,7 +111,7 @@ class DailySummaryService {
     if (kIsWeb) return;
 
     final followUpCount = _todayFollowUpCount();
-    final notes = _todayNotes();
+    final notes = await _todayNotes();
 
     final buffer = StringBuffer();
     if (followUpCount > 0) {
@@ -144,7 +152,7 @@ class DailySummaryService {
     if (targetDate != today) return;
 
     // Collect all notes for today
-    final allNotes = _notesForDate(year, month, day);
+    final allNotes = await _notesForDate(year, month, day);
 
     // Cancel existing reminders for today to avoid duplicates
     await cancelNoteReminder(year, month, day);
@@ -214,7 +222,7 @@ class DailySummaryService {
 
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final notes = _todayNotes();
+    final notes = await _todayNotes();
 
     if (notes.isEmpty) return;
 

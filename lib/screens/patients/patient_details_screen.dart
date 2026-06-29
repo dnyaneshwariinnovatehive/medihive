@@ -2,17 +2,16 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:hive_flutter/hive_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:path_provider/path_provider.dart';
 import '../../theme/app_theme.dart';
 import '../../models/patient.dart';
-import '../../models/patient_model.dart';
-import '../../models/opd_record_model.dart';
 import '../../models/prescription.dart';
 import '../../providers/patient_provider.dart';
 import '../../providers/settings_provider.dart';
+import '../../repositories/patient_repository.dart';
+import '../../repositories/opd_record_repository.dart';
 import '../../widgets/standard_header.dart';
 import '../../services/prescription_pdf_service.dart';
 import '../../services/whatsapp_share_helper.dart';
@@ -37,20 +36,96 @@ List<Map<String, String?>> _decodeMedicinesFromJson(String json) {
   return [];
 }
 
-class PatientDetailsScreen extends StatelessWidget {
+class PatientDetailsScreen extends StatefulWidget {
   final String patientId;
   const PatientDetailsScreen({super.key, required this.patientId});
 
   @override
+  State<PatientDetailsScreen> createState() => _PatientDetailsScreenState();
+}
+
+class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
+  PatientDetail? _patient;
+  List<VisitRecord> _visits = [];
+  List<Map<String, dynamic>> _opdRows = [];
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    final sqliteId =
+        int.tryParse(widget.patientId.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+    if (sqliteId == 0) {
+      if (mounted) setState(() => _loaded = true);
+      return;
+    }
+    final patientRepo = PatientRepository();
+    final patientRow = await patientRepo.getById(sqliteId);
+    if (patientRow == null) {
+      if (mounted) setState(() => _loaded = true);
+      return;
+    }
+    _patient = PatientDetail(
+      id: 'P$sqliteId',
+      name: (patientRow['full_name'] as String?) ?? '',
+      age: (patientRow['age'] as int?) ?? 0,
+      gender: (patientRow['gender'] as String?) ?? '',
+      mobile: (patientRow['mobile_number'] as String?) ?? '',
+      dob: (patientRow['dob'] as String?) ?? '',
+      bloodGroup: (patientRow['blood_group'] as String?) ?? '',
+      address: (patientRow['address'] as String?) ?? '',
+    );
+    final opdRepo = OpdRecordRepository();
+    _opdRows = await opdRepo.getByPatientId(sqliteId);
+    _visits = _opdRows.map((r) {
+      final consultation =
+          int.tryParse(r['consultation_fee']?.toString() ?? '') ?? 0;
+      final medicine =
+          int.tryParse(r['medicine_fee']?.toString() ?? '') ?? 0;
+      final disc =
+          int.tryParse(r['discount_value']?.toString() ?? '') ?? 0;
+      final totalFee = consultation + medicine - disc;
+      final visitDateStr = r['visit_datetime'] as String? ?? '';
+      DateTime visitDate;
+      try {
+        visitDate = DateTime.parse(visitDateStr);
+      } catch (_) {
+        visitDate = DateTime.now();
+      }
+      return VisitRecord(
+        date: DateFormat('dd MMM yyyy').format(visitDate),
+        type: ((r['opd_type'] as String?)?.isNotEmpty == true)
+            ? r['opd_type'] as String
+            : 'Consultation',
+        diagnosis: ((r['diagnosis'] as String?)?.isNotEmpty == true)
+            ? r['diagnosis'] as String
+            : 'No diagnosis',
+        notes: ((r['symptoms'] as String?)?.isNotEmpty == true)
+            ? r['symptoms'] as String
+            : 'No notes',
+        fees: totalFee > 0 ? totalFee : 0,
+      );
+    }).toList();
+    if (mounted) setState(() => _loaded = true);
+  }
+
+  @override
   Widget build(BuildContext context) {
     context.watch<SettingsProvider>();
-    final box = Hive.box<PatientModel>('patients');
-    final pModel = box.values.cast<PatientModel?>().firstWhere(
-      (p) => p?.id == patientId,
-      orElse: () => null,
-    );
 
-    if (pModel == null) {
+    if (!_loaded) {
+      return Scaffold(
+        backgroundColor: AppTheme.background,
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    final patient = _patient;
+    if (patient == null) {
       return Scaffold(
         backgroundColor: AppTheme.background,
         body: CustomScrollView(
@@ -65,36 +140,7 @@ class PatientDetailsScreen extends StatelessWidget {
       );
     }
 
-    final patient = PatientDetail(
-      id: pModel.id,
-      name: pModel.name,
-      age: pModel.age,
-      gender: pModel.gender.isNotEmpty ? pModel.gender : 'Unknown',
-      mobile: pModel.mobile,
-      dob: pModel.dob,
-      bloodGroup: pModel.bloodGroup.isNotEmpty ? pModel.bloodGroup : 'Unknown',
-      address: pModel.address,
-    );
-
-    final opdBox = Hive.box<OPDRecordModel>('opd_records');
-    final records = opdBox.values
-        .where((r) => r.patientId == patientId)
-        .toList();
-    records.sort((a, b) => b.visitDate.compareTo(a.visitDate));
-
-    final visits = records.map((r) {
-      final consultation = int.tryParse(r.consultationFee) ?? 0;
-      final medicine = int.tryParse(r.medicineFee) ?? 0;
-      final disc = int.tryParse(r.discount) ?? 0;
-      final totalFee = consultation + medicine - disc;
-      return VisitRecord(
-        date: DateFormat('dd MMM yyyy').format(r.visitDate),
-        type: r.type.isNotEmpty ? r.type : 'Consultation',
-        diagnosis: r.diagnosis.isNotEmpty ? r.diagnosis : 'No diagnosis',
-        notes: r.symptoms.isNotEmpty ? r.symptoms : 'No notes',
-        fees: totalFee > 0 ? totalFee : 0,
-      );
-    }).toList();
+    final visits = _visits;
 
     return Scaffold(
       backgroundColor: AppTheme.background,
@@ -275,7 +321,7 @@ class PatientDetailsScreen extends StatelessWidget {
                               flex: 3,
                               child: ElevatedButton.icon(
                                 onPressed: () =>
-                                    context.go('/app/prescription/$patientId'),
+                                    context.go('/app/prescription/${widget.patientId}'),
                                 icon: Icon(Icons.description, size: 20),
                                 label: Text('View Prescription'),
                                 style: ElevatedButton.styleFrom(
@@ -298,24 +344,15 @@ class PatientDetailsScreen extends StatelessWidget {
                               child: ElevatedButton.icon(
                                 onPressed: () async {
                                   try {
-                                    final opdBox = Hive.box<OPDRecordModel>(
-                                      'opd_records',
-                                    );
-                                    final records = opdBox.values
-                                        .where((r) => r.patientId == patientId)
-                                        .toList();
-                                    records.sort(
-                                      (a, b) => b.visitDate.compareTo(a.visitDate),
-                                    );
-                                    final latest = records.isNotEmpty
-                                        ? records.first
+                                    final latest = _opdRows.isNotEmpty
+                                        ? _opdRows.first
                                         : null;
                                     final settings = context.read<SettingsProvider>();
 
                                     List<Medicine> medicines = [];
-                                    if (latest != null && latest.medicines.isNotEmpty) {
+                                    if (latest != null && (latest['medicines'] as String? ?? '').isNotEmpty) {
                                       try {
-                                        final decoded = _decodeMedicinesFromJson(latest.medicines);
+                                        final decoded = _decodeMedicinesFromJson((latest['medicines'] as String? ?? ''));
                                         if (decoded.isNotEmpty) {
                                           medicines = decoded.map((m) => Medicine(
                                             name: m['name'] ?? '',
@@ -323,13 +360,13 @@ class PatientDetailsScreen extends StatelessWidget {
                                             duration: m['duration'] ?? '',
                                           )).toList();
                                         } else {
-                                          medicines = latest.medicines.split(',')
+                                          medicines = (latest['medicines'] as String? ?? '').split(',')
                                               .where((s) => s.trim().isNotEmpty)
                                               .map((s) => Medicine(name: s.trim(), dosage: '', duration: ''))
                                               .toList();
                                         }
                                       } catch (_) {
-                                        medicines = latest.medicines.split(',')
+                                        medicines = (latest['medicines'] as String? ?? '').split(',')
                                             .where((s) => s.trim().isNotEmpty)
                                             .map((s) => Medicine(name: s.trim(), dosage: '', duration: ''))
                                             .toList();
@@ -342,10 +379,10 @@ class PatientDetailsScreen extends StatelessWidget {
                                       patientId: patient.id,
                                       age: patient.age,
                                       gender: patient.gender,
-                                      diagnosis: latest?.diagnosis ?? '',
+                                      diagnosis: latest?['diagnosis'] as String? ?? '',
                                       medicines: medicines,
-                                      notes: latest?.clinicalNotes ?? '',
-                                      nextVisit: latest?.nextVisit ?? '',
+                                      notes: latest?['clinical_notes'] as String? ?? '',
+                                      nextVisit: latest?['next_visit_date'] as String? ?? '',
                                       doctorName: settings.doctorName,
                                       clinicName: settings.clinicName,
                                       clinicAddress: settings.clinicAddress,
@@ -439,7 +476,7 @@ class PatientDetailsScreen extends StatelessWidget {
                                     ),
                                   );
                                   if (confirmed == true && context.mounted) {
-                                    await context.read<PatientProvider>().deletePatientAndRecords(patientId);
+                                    await context.read<PatientProvider>().deletePatientAndRecords(widget.patientId);
                                     if (context.mounted) {
                                       context.go('/app/patients');
                                     }

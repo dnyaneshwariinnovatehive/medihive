@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:hive/hive.dart';
@@ -10,9 +11,10 @@ import 'package:path_provider/path_provider.dart';
 import 'google_auth_service.dart';
 import 'excel_export_service.dart';
 import 'excel_merge_service.dart';
-import '../models/patient_model.dart';
-import '../models/opd_record_model.dart';
 import '../models/appointment_model.dart';
+import '../repositories/patient_repository.dart';
+import '../repositories/opd_record_repository.dart';
+import '../repositories/sync_queue_repository.dart';
 
 // ─── Custom Exceptions ─────────────────────────────────────────
 
@@ -210,11 +212,14 @@ class GoogleDriveSyncService {
   Future<void> syncPendingRecords() async {
     _retryCount = 0;
 
-    final patientsBox = Hive.box<PatientModel>('patients');
-    final opdBox = Hive.box<OPDRecordModel>('opd_records');
+    final patientRepo = PatientRepository();
+    final opdRepo = OpdRecordRepository();
+    final syncRepo = SyncQueueRepository();
     final apptBox = Hive.box<AppointmentModel>('appointments');
 
-    final totalCount = patientsBox.length + opdBox.length + apptBox.length;
+    final patientCount = await patientRepo.count();
+    final opdCount = await opdRepo.count();
+    final totalCount = patientCount + opdCount + apptBox.length;
 
     try {
       // Step 1: Download the latest backup and merge it into local data
@@ -230,12 +235,18 @@ class GoogleDriveSyncService {
       await uploadBackup(excelBytes, fileName);
 
       // Step 3: Mark all records as synced
-      for (final p in patientsBox.values) {
-        await patientsBox.put(p.id, p.copyWith(isSynced: true));
+      // Patients and OPD records — clear pending sync_queue entries
+      final pending = await syncRepo.getPending();
+      for (final entry in pending) {
+        if (entry['entity_type'] == 'patient' ||
+            entry['entity_type'] == 'opd_visit') {
+          await syncRepo.update(
+            entry['id'] as int,
+            {'status': 'synced', 'last_attempt': DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now())},
+          );
+        }
       }
-      for (final r in opdBox.values) {
-        await opdBox.put(r.id, r.copyWith(isSynced: true));
-      }
+      // Appointments — mark Hive records as synced
       for (final a in apptBox.values) {
         await apptBox.put(a.id, a.copyWith(isSynced: true));
       }

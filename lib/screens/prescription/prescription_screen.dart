@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:hive_flutter/hive_flutter.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:printing/printing.dart';
@@ -9,9 +9,9 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../theme/app_theme.dart';
 import '../../models/prescription.dart';
-import '../../models/patient_model.dart';
-import '../../models/opd_record_model.dart';
 import '../../providers/settings_provider.dart';
+import '../../repositories/patient_repository.dart';
+import '../../repositories/opd_record_repository.dart';
 import '../../widgets/standard_header.dart';
 import '../../services/prescription_pdf_service.dart';
 import '../../widgets/animated_list_item.dart';
@@ -59,7 +59,7 @@ class _PrescriptionScreenState extends State<PrescriptionScreen> {
   late TextEditingController _notesController;
   late TextEditingController _nextVisitController;
   late List<_MedicineFieldData> _medicineFields;
-  late OPDRecordModel _latestRecord;
+  late Map<String, dynamic> _latestRecord;
   late Prescription _rx;
 
   @override
@@ -68,35 +68,40 @@ class _PrescriptionScreenState extends State<PrescriptionScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _loadData();
-      setState(() {});
     });
   }
 
-  void _loadData() {
+  Future<void> _loadData() async {
     try {
-      final patientBox = Hive.box<PatientModel>('patients');
-      final pModel = patientBox.values.cast<PatientModel?>().firstWhere(
-        (p) => p?.id == widget.patientId,
-        orElse: () => null,
-      );
-
-      if (pModel == null) {
+      final sqliteId =
+          int.tryParse(widget.patientId.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+      if (sqliteId == 0) {
         _hasError = true;
         _errorMessage = 'Patient not found';
         _dataLoaded = true;
+        if (mounted) setState(() {});
         return;
       }
 
-      final opdBox = Hive.box<OPDRecordModel>('opd_records');
-      final records = opdBox.values
-          .where((r) => r.patientId == widget.patientId)
-          .toList();
-      records.sort((a, b) => b.visitDate.compareTo(a.visitDate));
+      final patientRepo = PatientRepository();
+      final patientRow = await patientRepo.getById(sqliteId);
+
+      if (patientRow == null) {
+        _hasError = true;
+        _errorMessage = 'Patient not found';
+        _dataLoaded = true;
+        if (mounted) setState(() {});
+        return;
+      }
+
+      final opdRepo = OpdRecordRepository();
+      final records = await opdRepo.getByPatientId(sqliteId);
 
       if (records.isEmpty) {
         _hasError = true;
         _errorMessage = 'No prescription records found for this patient';
         _dataLoaded = true;
+        if (mounted) setState(() {});
         return;
       }
 
@@ -104,14 +109,15 @@ class _PrescriptionScreenState extends State<PrescriptionScreen> {
 
       final settings = context.read<SettingsProvider>();
 
+      final medRaw = _latestRecord['medicines'] as String? ?? '';
       final List<Medicine> medList = [];
-      if (_latestRecord.medicines.isNotEmpty) {
+      if (medRaw.isNotEmpty) {
         try {
-          final decoded = _decodeMedicines(_latestRecord.medicines);
+          final decoded = _decodeMedicines(medRaw);
           if (decoded.isNotEmpty) {
             medList.addAll(decoded);
           } else {
-            final parts = _latestRecord.medicines.split(',');
+            final parts = medRaw.split(',');
             for (var part in parts) {
               if (part.trim().isNotEmpty) {
                 medList.add(
@@ -125,7 +131,7 @@ class _PrescriptionScreenState extends State<PrescriptionScreen> {
             }
           }
         } catch (_) {
-          final parts = _latestRecord.medicines.split(',');
+          final parts = medRaw.split(',');
           for (var part in parts) {
             if (part.trim().isNotEmpty) {
               medList.add(
@@ -136,22 +142,27 @@ class _PrescriptionScreenState extends State<PrescriptionScreen> {
         }
       }
 
+      final visitDtStr = _latestRecord['visit_datetime'] as String? ?? '';
+      final visitDate = DateTime.tryParse(visitDtStr) ?? DateTime.now();
+      final diagnosis = _latestRecord['diagnosis'] as String? ?? '';
+      final symptoms = _latestRecord['symptoms'] as String? ?? '';
+      final nextVisit = _latestRecord['next_visit_date'] as String? ?? '';
+      final patientName = patientRow['full_name'] as String? ?? '';
+      final patientIdStr = 'P$sqliteId';
+      final patientAge = patientRow['age'] as int? ?? 0;
+      final patientGender = patientRow['gender'] as String? ?? '';
+      final patientMobile = patientRow['mobile_number'] as String? ?? '';
+
       _rx = Prescription(
-        date: DateFormat('dd MMM yyyy').format(_latestRecord.visitDate),
-        patientName: pModel.name,
-        patientId: pModel.id,
-        age: pModel.age,
-        gender: pModel.gender.isNotEmpty ? pModel.gender : 'Unknown',
-        diagnosis: _latestRecord.diagnosis.isNotEmpty
-            ? _latestRecord.diagnosis
-            : 'Consultation',
+        date: DateFormat('dd MMM yyyy').format(visitDate),
+        patientName: patientName,
+        patientId: patientIdStr,
+        age: patientAge,
+        gender: patientGender.isNotEmpty ? patientGender : 'Unknown',
+        diagnosis: diagnosis.isNotEmpty ? diagnosis : 'Consultation',
         medicines: medList,
-        notes: _latestRecord.symptoms.isNotEmpty
-            ? _latestRecord.symptoms
-            : 'No specific instructions.',
-        nextVisit: _latestRecord.nextVisit.isNotEmpty
-            ? _latestRecord.nextVisit
-            : 'As required',
+        notes: symptoms.isNotEmpty ? symptoms : 'No specific instructions.',
+        nextVisit: nextVisit.isNotEmpty ? nextVisit : 'As required',
         doctorName: settings.doctorName.isNotEmpty
             ? settings.doctorName
             : 'Dr. Rajas Gavas',
@@ -167,7 +178,7 @@ class _PrescriptionScreenState extends State<PrescriptionScreen> {
         licenseNo: settings.doctorLicense.isNotEmpty
             ? settings.doctorLicense
             : 'I-107200-A',
-        patientMobile: pModel.mobile.isNotEmpty ? pModel.mobile : '',
+        patientMobile: patientMobile.isNotEmpty ? patientMobile : '',
       );
 
       _diagnosisController = TextEditingController(text: _rx.diagnosis);
@@ -179,6 +190,7 @@ class _PrescriptionScreenState extends State<PrescriptionScreen> {
       _errorMessage = 'Failed to load prescription: $e';
     }
     _dataLoaded = true;
+    if (mounted) setState(() {});
   }
 
   void _initMedicineFields() {
@@ -234,7 +246,7 @@ class _PrescriptionScreenState extends State<PrescriptionScreen> {
     }
   }
 
-  void _saveChanges() {
+  Future<void> _saveChanges() async {
     final newDiagnosis = _diagnosisController.text.trim();
     final newNotes = _notesController.text.trim();
     final newNextVisit = _nextVisitController.text.trim();
@@ -244,19 +256,36 @@ class _PrescriptionScreenState extends State<PrescriptionScreen> {
         .toList();
     final newMedicinesRaw = newMedicinesList.map((m) => m.name).join(', ');
 
-    final opdBox = Hive.box<OPDRecordModel>('opd_records');
-    final updatedRecord = _latestRecord.copyWith(
-      diagnosis: newDiagnosis.isNotEmpty
-          ? newDiagnosis
-          : _latestRecord.diagnosis,
-      symptoms: newNotes.isNotEmpty ? newNotes : _latestRecord.symptoms,
-      medicines: newMedicinesRaw.isNotEmpty
-          ? newMedicinesRaw
-          : _latestRecord.medicines,
-      updatedAt: DateTime.now(),
-    );
-    opdBox.put(updatedRecord.id, updatedRecord);
-    _latestRecord = updatedRecord;
+    final opdRepo = OpdRecordRepository();
+    final updatedRow = Map<String, dynamic>.from(_latestRecord);
+    updatedRow['diagnosis'] = newDiagnosis.isNotEmpty
+        ? newDiagnosis
+        : (_latestRecord['diagnosis'] as String? ?? '');
+    updatedRow['symptoms'] = newNotes.isNotEmpty
+        ? newNotes
+        : (_latestRecord['symptoms'] as String? ?? '');
+    updatedRow['medicines'] = newMedicinesRaw.isNotEmpty
+        ? newMedicinesRaw
+        : (_latestRecord['medicines'] as String? ?? '');
+    updatedRow['next_visit_date'] = newNextVisit.isNotEmpty
+        ? newNextVisit
+        : (_latestRecord['next_visit_date'] as String? ?? '');
+
+    try {
+      await opdRepo.update(_latestRecord['id'] as int, updatedRow);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to save prescription: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    _latestRecord = updatedRow;
 
     final updatedRx = Prescription(
       date: _rx.date,
@@ -362,6 +391,7 @@ class _PrescriptionScreenState extends State<PrescriptionScreen> {
           StandardHeader(
             title: 'Prescription',
             showBack: true,
+            onBack: () => context.go('/app/patients/${widget.patientId}'),
           ),
           SliverToBoxAdapter(
             child: Padding(

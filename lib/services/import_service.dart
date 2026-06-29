@@ -1,11 +1,12 @@
 import 'dart:io';
 import 'package:sqflite/sqflite.dart';
+import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:hive/hive.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../models/patient_model.dart';
-import '../models/opd_record_model.dart';
+import '../repositories/patient_repository.dart';
+import '../repositories/opd_record_repository.dart';
 
 class ImportResult {
   final int patientsImported;
@@ -42,50 +43,55 @@ class ImportService {
       bool settingsImported = false;
       int notesImported = 0;
 
-      final patientBox = Hive.box<PatientModel>('patients');
-      final opdBox = Hive.box<OPDRecordModel>('opd_records');
+      final patientRepo = PatientRepository();
+      final opdRepo = OpdRecordRepository();
       final dayNotesBox = Hive.box('day_notes');
 
-      // Map: desktop patient_id => new string id
-      final patientIdMap = <int, String>{};
+      // Map: desktop patient_id => mobile sqlite patient_id
+      final patientIdMap = <int, int>{};
 
       // 1. Import patients
+      final allExistingPatients = await patientRepo.getAll();
       final patientRows = await db.rawQuery('SELECT * FROM patients ORDER BY id');
       for (final row in patientRows) {
         final mobile = (row['mobile_number'] as String?)?.trim() ?? '';
         final name = (row['full_name'] as String?)?.trim() ?? '';
         if (name.isEmpty) continue;
 
-        final existing = patientBox.values.cast<PatientModel?>().firstWhere(
-          (p) => p?.mobile == mobile && p?.name == name,
+        final existing = allExistingPatients.cast<Map<String, dynamic>?>().firstWhere(
+          (p) => (p?['mobile_number'] as String? ?? '') == mobile &&
+              (p?['full_name'] as String? ?? '') == name,
           orElse: () => null,
         );
 
+        final desktopId = row['id'] as int;
+
         if (existing != null && !overwrite) {
-          patientIdMap[row['id'] as int] = existing.id;
+          patientIdMap[desktopId] = existing['id'] as int;
           patientsSkipped++;
           continue;
         }
 
-        final desktopId = row['id'] as int;
-        final newId = 'pat_$desktopId';
-        patientIdMap[desktopId] = newId;
+        patientIdMap[desktopId] = desktopId;
 
-        final model = PatientModel(
-          id: newId,
-          name: name,
-          dob: (row['dob'] as String?)?.trim() ?? '',
-          age: row['age'] as int? ?? 0,
-          mobile: mobile,
-          address: (row['address'] as String?)?.trim() ?? '',
-          createdAt: _parseDateTime(row['created_at']),
-          updatedAt: _parseDateTime(row['created_at']),
-          isSynced: false,
-          gender: _nonEmpty(row['gender'] as String?, 'Not Specified'),
-          bloodGroup: _nonEmpty(row['blood_group'] as String?, 'Not Specified'),
-        );
+        final nowStr = DateFormat('yyyy-MM-dd HH:mm:ss').format(_parseDateTime(row['created_at']));
+        final patientRow = <String, dynamic>{
+          'id': desktopId,
+          'full_name': name,
+          'dob': (row['dob'] as String?)?.trim() ?? '',
+          'age': row['age'] as int? ?? 0,
+          'mobile_number': mobile,
+          'address': (row['address'] as String?)?.trim() ?? '',
+          'gender': _nonEmpty(row['gender'] as String?, 'Not Specified'),
+          'blood_group': _nonEmpty(row['blood_group'] as String?, 'Not Specified'),
+          'created_at': nowStr,
+        };
 
-        await patientBox.put(newId, model);
+        if (existing != null) {
+          await patientRepo.update(desktopId, patientRow);
+        } else {
+          await patientRepo.insert(patientRow);
+        }
         patientsImported++;
       }
 
@@ -96,49 +102,43 @@ class ImportService {
         final patientId = row['patient_id'] as int?;
         if (opdId.isEmpty || patientId == null) continue;
 
-        final mappedPatientId = patientIdMap[patientId] ?? 'pat_$patientId';
+        final mappedPatientId = patientIdMap[patientId] ?? patientId;
 
-        final existing = opdBox.values.cast<OPDRecordModel?>().firstWhere(
-          (o) => o?.id == opdId,
-          orElse: () => null,
-        );
-
+        final existing = await opdRepo.getByOpdId(opdId);
         if (existing != null && !overwrite) {
           opdSkipped++;
           continue;
         }
 
         final medicines = _buildMedicines(row['medicines'] as String?);
-        final notes = <String>[];
-        final clinicalNotes = (row['clinical_notes'] as String?)?.trim() ?? '';
-        if (clinicalNotes.isNotEmpty) notes.add(clinicalNotes);
-        final panchakarma = (row['panchakarma_notes'] as String?)?.trim() ?? '';
-        if (panchakarma.isNotEmpty) notes.add('Panchakarma: $panchakarma');
+        final visitDtStr = DateFormat('yyyy-MM-dd HH:mm:ss').format(_parseDateTime(row['visit_datetime']));
+        final nowStr = DateFormat('yyyy-MM-dd HH:mm:ss').format(_parseDateTime(row['created_at'] ?? row['visit_datetime']));
 
-        final model = OPDRecordModel(
-          id: opdId,
-          patientId: mappedPatientId,
-          type: _nonEmpty(row['opd_type'] as String?, 'Consultation'),
-          symptoms: (row['symptoms'] as String?)?.trim() ?? '',
-          diagnosis: (row['diagnosis'] as String?)?.trim() ?? '',
-          medicines: medicines,
-          visitDate: _parseDateTime(row['visit_datetime']),
-          isDraft: false,
-          isSynced: false,
-          createdAt: _parseDateTime(row['created_at']),
-          updatedAt: _parseDateTime(row['created_at'] ?? row['visit_datetime']),
-          clinicalNotes: notes.join('\n'),
-          consultationFee: _feeToString(row['consultation_fee']),
-          medicineFee: _feeToString(row['medicine_fee']),
-          discount: _discountToString(row['discount_type'] as String?, row['discount_value']),
-          paymentMode: _nonEmpty(row['payment_mode'] as String?, ''),
-          chargeType: _nonEmpty(row['charge_type'] as String?, ''),
-          nextVisit: (row['next_visit_date'] as String?)?.trim() ?? '',
-          followUpReason: _nonEmpty(row['followup_status'] as String?, ''),
-          bloodGroup: '',
-        );
+        final opdRow = <String, dynamic>{
+          'opd_id': opdId,
+          'patient_id': mappedPatientId,
+          'opd_type': _nonEmpty(row['opd_type'] as String?, 'Consultation'),
+          'visit_datetime': visitDtStr,
+          'symptoms': (row['symptoms'] as String?)?.trim() ?? '',
+          'diagnosis': (row['diagnosis'] as String?)?.trim() ?? '',
+          'medicines': medicines,
+          'clinical_notes': (row['clinical_notes'] as String?)?.trim() ?? '',
+          'consultation_fee': row['consultation_fee'] != null ? (row['consultation_fee'] as num).toDouble() : null,
+          'medicine_fee': row['medicine_fee'] != null ? (row['medicine_fee'] as num).toDouble() : null,
+          'discount_type': row['discount_type'] as String?,
+          'discount_value': row['discount_value'] != null ? (row['discount_value'] as num).toDouble() : null,
+          'payment_mode': _nonEmpty(row['payment_mode'] as String?, ''),
+          'charge_type': _nonEmpty(row['charge_type'] as String?, ''),
+          'next_visit_date': (row['next_visit_date'] as String?)?.trim() ?? '',
+          'followup_status': _nonEmpty(row['followup_status'] as String?, ''),
+          'created_at': nowStr,
+        };
 
-        await opdBox.put(opdId, model);
+        if (existing != null) {
+          await opdRepo.update(existing['id'] as int, opdRow);
+        } else {
+          await opdRepo.insert(opdRow);
+        }
         opdImported++;
       }
 
@@ -212,19 +212,6 @@ class ImportService {
       return DateTime.tryParse(value) ?? DateTime.now();
     }
     return DateTime.now();
-  }
-
-  static String _feeToString(dynamic fee) {
-    if (fee == null) return '';
-    if (fee is num) return fee.toStringAsFixed(2);
-    return fee.toString();
-  }
-
-  static String _discountToString(String? type, dynamic value) {
-    if (value == null) return '';
-    final val = value is num ? value.toStringAsFixed(2) : value.toString();
-    if (type?.trim().isNotEmpty == true) return '$type: $val';
-    return val;
   }
 
   static String _buildMedicines(String? raw) {

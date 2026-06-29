@@ -7,9 +7,10 @@
         android:maxSdkVersion="28"/>
     
     <application
-        android:label="medihive"
-        android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+    android:label="MediHive"
+    android:name="${applicationName}"
+    android:icon="@mipmap/ic_launcher"
+    android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"

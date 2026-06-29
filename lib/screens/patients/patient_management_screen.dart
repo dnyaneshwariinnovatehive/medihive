@@ -2,13 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
-import 'package:hive_flutter/hive_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../theme/app_theme.dart';
 import '../../providers/patient_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../models/patient.dart';
-import '../../models/opd_record_model.dart';
+import '../../repositories/opd_record_repository.dart';
 import '../../widgets/animated_list_item.dart';
 import '../../widgets/pressable_card.dart';
 import '../../widgets/standard_header.dart';
@@ -25,6 +24,8 @@ class _PatientManagementScreenState extends State<PatientManagementScreen> {
   final ScrollController _scrollController = ScrollController();
   bool _showFab = true;
   late DateTime _selectedDate;
+  Set<String> _datePatientIds = {};
+  int _lastPatientCount = -1;
 
   @override
   void initState() {
@@ -74,6 +75,20 @@ class _PatientManagementScreenState extends State<PatientManagementScreen> {
         _selectedDate.day == now.day;
   }
 
+  Future<void> _loadDateRecords() async {
+    try {
+      final opdRepo = OpdRecordRepository();
+      final rows = await opdRepo.getByDate(_selectedDate);
+      _datePatientIds = rows
+          .map((r) => 'P${(r['patient_id'] as int).toString().padLeft(3, '0')}')
+          .where((id) => id != 'P000')
+          .toSet();
+    } catch (_) {
+      _datePatientIds = {};
+    }
+    if (mounted) setState(() {});
+  }
+
   Future<void> _pickDate() async {
     final picked = await showDatePicker(
       context: context,
@@ -94,6 +109,7 @@ class _PatientManagementScreenState extends State<PatientManagementScreen> {
     );
     if (picked != null) {
       setState(() => _selectedDate = picked);
+      _loadDateRecords();
     }
   }
 
@@ -101,16 +117,14 @@ class _PatientManagementScreenState extends State<PatientManagementScreen> {
   Widget build(BuildContext context) {
     context.watch<SettingsProvider>();
     final provider = context.watch<PatientProvider>();
-    final opdBox = Hive.box<OPDRecordModel>('opd_records');
-    final dateRecords = opdBox.values.where((r) =>
-      r.visitDate.year == _selectedDate.year &&
-      r.visitDate.month == _selectedDate.month &&
-      r.visitDate.day == _selectedDate.day
-    ).toList();
-    final datePatientIds = dateRecords.map((r) => r.patientId).toSet();
+    final count = provider.filteredPatients.length;
+    if (count != _lastPatientCount) {
+      _lastPatientCount = count;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadDateRecords());
+    }
     final allPatients = provider.filteredPatients;
     final dateFilteredPatients = allPatients.where((p) =>
-      datePatientIds.contains(p.id)
+      _datePatientIds.contains(p.id)
     ).toList();
 
     return Scaffold(

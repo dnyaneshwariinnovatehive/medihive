@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:hive_flutter/hive_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../../theme/app_theme.dart';
-import '../../models/opd_record_model.dart';
-import '../../models/patient_model.dart';
 import '../../providers/opd_provider.dart';
 import '../../providers/settings_provider.dart';
+import '../../repositories/opd_record_repository.dart';
+import '../../repositories/patient_repository.dart';
 import '../../widgets/pressable_card.dart';
 import '../../widgets/standard_header.dart';
 
@@ -20,11 +19,45 @@ class OpdQueueScreen extends StatefulWidget {
 
 class _OpdQueueScreenState extends State<OpdQueueScreen> {
   late DateTime _selectedDate;
+  List<Map<String, dynamic>> _records = [];
+  Map<int, Map<String, dynamic>> _patientMap = {};
+  bool _loaded = false;
+  DateTime _lastRefresh = DateTime(2000);
+  bool _refreshScheduled = false;
 
   @override
   void initState() {
     super.initState();
     _selectedDate = DateTime.now();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadData());
+  }
+
+  Future<void> _loadData() async {
+    try {
+      final opdRepo = OpdRecordRepository();
+      final patientRepo = PatientRepository();
+      final allPatients = await patientRepo.getAll();
+      _patientMap = {
+        for (final p in allPatients) (p['id'] as int): p,
+      };
+      _records = await opdRepo.getByDate(_selectedDate);
+    } catch (_) {
+      _records = [];
+      _patientMap = {};
+    }
+    if (mounted) setState(() => _loaded = true);
+  }
+
+  void _scheduleRefreshIfStale() {
+    if (_refreshScheduled) return;
+    _refreshScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _refreshScheduled = false;
+      if (DateTime.now().difference(_lastRefresh).inSeconds > 3) {
+        _lastRefresh = DateTime.now();
+        _loadData();
+      }
+    });
   }
 
   Future<void> _pickDate() async {
@@ -47,6 +80,7 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
     );
     if (picked != null) {
       setState(() => _selectedDate = picked);
+      _loadData();
     }
   }
 
@@ -57,9 +91,10 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
         _selectedDate.day == now.day;
   }
 
-  Widget _buildTypeCapsule(OPDRecordModel record) {
-    final isFollowUp = record.type == 'follow_up' ||
-        record.followUpReason.isNotEmpty;
+  Widget _buildTypeCapsule(Map<String, dynamic> record) {
+    final opdType = record['opd_type'] as String? ?? '';
+    final followUpStatus = record['followup_status'] as String? ?? '';
+    final isFollowUp = opdType == 'follow_up' || followUpStatus.isNotEmpty;
     final label = isFollowUp ? 'FOLLOW-UP' : 'CONSULTATION';
     final color = isFollowUp ? AppTheme.warning : AppTheme.primary;
 
@@ -83,6 +118,8 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
   @override
   Widget build(BuildContext context) {
     context.watch<SettingsProvider>();
+    context.watch<OpdProvider>();
+    _scheduleRefreshIfStale();
     return Scaffold(
       backgroundColor: AppTheme.background,
       body: CustomScrollView(
@@ -160,23 +197,16 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 80),
-              child: ValueListenableBuilder(
-                valueListenable: Hive.box<OPDRecordModel>(
-                  'opd_records',
-                ).listenable(),
-                builder: (context, Box<OPDRecordModel> box, _) {
-                  final records =
-                      box.values
-                          .where(
-                            (r) =>
-                                r.visitDate.year == _selectedDate.year &&
-                                r.visitDate.month == _selectedDate.month &&
-                                r.visitDate.day == _selectedDate.day,
-                          )
-                          .toList()
-                        ..sort(
-                          (a, b) => b.visitDate.compareTo(a.visitDate),
-                        );
+              child: Builder(
+                builder: (context) {
+                  if (!_loaded) {
+                    return const SizedBox(
+                      height: 200,
+                      child: Center(child: CircularProgressIndicator()),
+                    );
+                  }
+
+                  final records = _records;
 
                   if (records.isEmpty) {
                     return SizedBox(
@@ -259,9 +289,10 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
                         itemCount: records.length,
                         itemBuilder: (context, index) {
                           final record = records[index];
-                          final patientBox =
-                              Hive.box<PatientModel>('patients');
-                          final patient = patientBox.get(record.patientId);
+                          final patient = _patientMap[record['patient_id'] as int];
+                          final patientName = patient?['full_name'] as String?;
+                          final patientAge = patient?['age'] as int? ?? 0;
+                          final patientGender = patient?['gender'] as String?;
 
                           return Padding(
                             padding: const EdgeInsets.only(bottom: 12),
@@ -277,14 +308,14 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
                                   child: Row(
                                     children: [
                                       Hero(
-                                        tag: 'queue_avatar_${record.patientId}',
+                                        tag: 'queue_avatar_P${record['patient_id']}',
                                         child: CircleAvatar(
                                           radius: 24,
                                           backgroundColor: AppTheme.primary
                                               .withValues(alpha: 0.10),
                                           child: Text(
-                                            patient?.name.isNotEmpty == true
-                                                ? patient!.name[0]
+                                            patientName?.isNotEmpty == true
+                                                ? patientName![0]
                                                     .toUpperCase()
                                                 : '?',
                                             style: TextStyle(
@@ -305,7 +336,7 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
                                               children: [
                                                 Expanded(
                                                   child: Text(
-                                                    patient?.name ?? 'Unknown',
+                                                    patientName ?? 'Unknown',
                                                     style: AppTheme.body.copyWith(
                                                       fontWeight: FontWeight.bold,
                                                       fontSize: 16,
@@ -324,7 +355,7 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
                                             Row(
                                               children: [
                                                 Text(
-                                                  'ID: ${record.patientId}',
+                                                  'ID: P${record['patient_id']}',
                                                   style: AppTheme.caption.copyWith(
                                                     fontSize: 11,
                                                     fontWeight: FontWeight.w600,
@@ -342,7 +373,7 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
                                                   ),
                                                 ),
                                                 Text(
-                                                  '${patient?.age ?? 0} Years',
+                                                  '$patientAge Years',
                                                   style: AppTheme.caption.copyWith(
                                                     fontSize: 11,
                                                     fontWeight: FontWeight.w600,
@@ -360,7 +391,7 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
                                                   ),
                                                 ),
                                                 Text(
-                                                  patient?.gender ?? 'Not Specified',
+                                                  patientGender ?? 'Not Specified',
                                                   style: AppTheme.caption.copyWith(
                                                     fontSize: 11,
                                                     fontWeight: FontWeight.w600,
@@ -374,8 +405,8 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
                                               children: [
                                                 Expanded(
                                                   child: Text(
-                                                    record.diagnosis.isNotEmpty
-                                                        ? record.diagnosis
+                                                    (record['diagnosis'] as String? ?? '').isNotEmpty
+                                                        ? record['diagnosis'] as String
                                                         : 'No diagnosis',
                                                     style: AppTheme.caption.copyWith(
                                                       color: AppTheme.textSecondary,
@@ -390,7 +421,7 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
                                                 const SizedBox(width: 8),
                                                 GestureDetector(
                                                   onTap: () => context.push(
-                                                    '/app/prescription/${record.patientId}',
+                                                    '/app/prescription/P${record['patient_id']}',
                                                   ),
                                                   child: const Padding(
                                                     padding:
