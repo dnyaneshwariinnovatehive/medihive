@@ -67,8 +67,9 @@ def initialize_google_services():
         logger.critical("Google setup validation error: %s", e)
 
 
+init_db()
+initialize_google_services()
+app = create_app()
+
 if __name__ == '__main__':
-    init_db()
-    initialize_google_services()
-    app = create_app()
     app.run(host='0.0.0.0', port=5000, debug=True)
