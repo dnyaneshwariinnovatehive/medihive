@@ -53,6 +53,8 @@ GOOGLE_CREDENTIALS_FILE = os.environ.get(
     'GOOGLE_CREDENTIALS_FILE',
     os.path.join(BASE_DIR, '..', 'credentials', 'credentials.json')
 )
+# Read credentials JSON directly from env var (used on Render/Railway where file upload is unavailable)
+GOOGLE_CREDENTIALS_JSON = os.environ.get('GOOGLE_CREDENTIALS_JSON', '')
 
 GOOGLE_CREDENTIALS_PATH = GOOGLE_CREDENTIALS_FILE
 GOOGLE_SHEET_NAME = os.environ.get('GOOGLE_SHEET_NAME', "MediHive - Patient Records")
@@ -62,6 +64,7 @@ DRIVE_TOKEN_PATH = os.environ.get(
     'DRIVE_TOKEN_PATH',
     os.path.join(BASE_DIR, '..', 'drive_token.json')
 )
+DRIVE_TOKEN_JSON = os.environ.get('DRIVE_TOKEN_JSON', '')
 
 # Image storage: local dir (default) or system temp (cloud)
 if IS_CLOUD:

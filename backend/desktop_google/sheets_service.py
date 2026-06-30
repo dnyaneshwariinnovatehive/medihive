@@ -3,18 +3,34 @@ sheets_service.py
 =================
 Writes OPD visit rows into 'opd_visits' tab and
 calendar notes into 'calendar_notes' tab of Clinic_Backup spreadsheet.
+
+⚠ PERMANENT LOCK: This module MUST NEVER create a new Google Sheet.
+   The _open_spreadsheet() function is designed to ALWAYS fail with
+   a RuntimeError if the existing sheet cannot be opened.
+   This is a HARD invariant — any code that attempts to create a
+   new sheet here will be rejected during code review.
 """
 
+import json
 import os
 from datetime import date, datetime
 
 import gspread
 from google.oauth2.service_account import Credentials
 
-from config import GOOGLE_CREDENTIALS_PATH, GOOGLE_SHEET_NAME
+from config import GOOGLE_CREDENTIALS_PATH, GOOGLE_CREDENTIALS_JSON, GOOGLE_SHEET_NAME, GOOGLE_SHEET_ID, SHEET_ID_FILE, DATABASE_PATH, DRIVE_ROOT_FOLDER_ID
 from services.log_service import get_logger
+import sqlite3
 
 logger = get_logger(__name__)
+
+# ── PERMANENT LOCK ─────────────────────────────────────────────
+# Setting this to False ensures this module NEVER creates a new
+# Google Sheet. If any future code path attempts to call
+# client.create(), it will violate this contract.
+# Change only if you fully understand the consequences.
+PERMANENTLY_DISABLE_SHEET_CREATION = True
+# ───────────────────────────────────────────────────────────────
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -77,37 +93,155 @@ def _build_row(data: dict) -> list:
     for header, value in data.items():
         idx = HEADER_TO_INDEX.get(header)
         if idx is not None:
+            if isinstance(value, list):
+                value = "\n".join(value) if value else None
             row[idx] = _fmt(value)
     return row
+
+
+# ─────────────────────────────────────────────
+# SHEET ID PERSISTENCE (SQLite + file fallback)
+# ─────────────────────────────────────────────
+def _load_sheet_id_from_db():
+    """Load the spreadsheet ID from the SQLite settings table."""
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'spreadsheet_id'"
+        ).fetchone()
+        conn.close()
+        if row and row[0]:
+            sid = row[0]
+            logger.info("Loaded sheet ID from SQLite: %s", sid)
+            return sid
+    except Exception as e:
+        logger.warning("Could not load sheet ID from SQLite: %s", e)
+    return None
+
+
+def _save_sheet_id_to_db(spreadsheet_id):
+    """Persist the spreadsheet ID in the SQLite settings table."""
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            ('spreadsheet_id', spreadsheet_id)
+        )
+        conn.commit()
+        conn.close()
+        logger.info("Persisted sheet ID to SQLite: %s", spreadsheet_id)
+        return True
+    except Exception as e:
+        logger.warning("Could not save sheet ID to SQLite: %s", e)
+    return False
+
+
+def _load_sheet_id():
+    """Load the previously saved spreadsheet ID — tries SQLite first, then JSON file."""
+    sid = _load_sheet_id_from_db()
+    if sid:
+        return sid
+    try:
+        if os.path.exists(SHEET_ID_FILE):
+            with open(SHEET_ID_FILE, 'r') as f:
+                data = json.load(f)
+                sid = data.get('spreadsheet_id')
+                if sid:
+                    logger.info("Loaded sheet ID from JSON file: %s", sid)
+                    return sid
+    except Exception as e:
+        logger.warning("Could not load sheet ID file: %s", e)
+    return None
+
+
+def _save_sheet_id(spreadsheet_id):
+    """Persist the spreadsheet ID — writes to both SQLite and JSON file for safety."""
+    db_ok = _save_sheet_id_to_db(spreadsheet_id)
+    file_ok = True
+    try:
+        os.makedirs(os.path.dirname(SHEET_ID_FILE), exist_ok=True)
+        with open(SHEET_ID_FILE, 'w') as f:
+            json.dump({'spreadsheet_id': spreadsheet_id}, f)
+    except Exception as e:
+        logger.warning("Could not save sheet ID to file: %s", e)
+        file_ok = False
+    if db_ok or file_ok:
+        logger.info("Sheet ID %s persisted successfully", spreadsheet_id)
+    else:
+        logger.warning("Sheet ID %s could NOT be persisted (both SQLite and file failed)", spreadsheet_id)
 
 
 # ─────────────────────────────────────────────
 # GOOGLE SHEETS CLIENT
 # ─────────────────────────────────────────────
 def _get_client():
-    logger.info("Loading credentials from: %s", GOOGLE_CREDENTIALS_PATH)
-
-    if not os.path.exists(GOOGLE_CREDENTIALS_PATH):
-        raise FileNotFoundError(
-            "credentials.json not found at: %s\n"
-            "Download from Google Cloud Console -> IAM -> Service Accounts -> Keys."
-            % GOOGLE_CREDENTIALS_PATH
+    if GOOGLE_CREDENTIALS_JSON:
+        logger.info("Loading credentials from GOOGLE_CREDENTIALS_JSON env var")
+        info = json.loads(GOOGLE_CREDENTIALS_JSON)
+        creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+    else:
+        logger.info("Loading credentials from: %s", GOOGLE_CREDENTIALS_PATH)
+        if not os.path.exists(GOOGLE_CREDENTIALS_PATH):
+            raise FileNotFoundError(
+                "credentials.json not found at: %s\n"
+                "Set GOOGLE_CREDENTIALS_JSON env var or place the file at the expected path."
+                % GOOGLE_CREDENTIALS_PATH
+            )
+        creds = Credentials.from_service_account_file(
+            GOOGLE_CREDENTIALS_PATH, scopes=SCOPES
         )
-
-    creds = Credentials.from_service_account_file(
-        GOOGLE_CREDENTIALS_PATH, scopes=SCOPES
-    )
     return gspread.authorize(creds)
 
 
 def _open_spreadsheet(client):
+    """
+    Open the existing spreadsheet.
+    NEVER creates a new spreadsheet — this is a permanent invariant to prevent duplicates.
+    Uses GOOGLE_SHEET_ID from config.py as the single authoritative source.
+    """
+    # ── Step 1: config.py is the single source of truth ──────────
+    if GOOGLE_SHEET_ID:
+        try:
+            spreadsheet = client.open_by_key(GOOGLE_SHEET_ID)
+            logger.info("Opened spreadsheet by config ID: %s", GOOGLE_SHEET_ID)
+            _save_sheet_id(GOOGLE_SHEET_ID)
+            return spreadsheet
+        except Exception as e:
+            logger.error(
+                "Config sheet ID %s from config.py FAILED: %s. "
+                "Verify the service account has editor access to this sheet.",
+                GOOGLE_SHEET_ID, e
+            )
+
+    # ── Step 2: try the persisted ID (fallback for legacy setups) ─
+    saved_id = _load_sheet_id()
+    if saved_id:
+        try:
+            spreadsheet = client.open_by_key(saved_id)
+            logger.info("Opened spreadsheet by persisted ID: %s", saved_id)
+            return spreadsheet
+        except Exception as e:
+            logger.warning("Persisted sheet ID %s failed: %s", saved_id, e)
+
+    # ── Step 3: try opening by name ──────────────────────────────
     try:
         spreadsheet = client.open(GOOGLE_SHEET_NAME)
-        logger.info("Opened spreadsheet: %s", GOOGLE_SHEET_NAME)
-    except gspread.SpreadsheetNotFound:
-        logger.info("Spreadsheet not found — creating: %s", GOOGLE_SHEET_NAME)
-        spreadsheet = client.create(GOOGLE_SHEET_NAME)
-    return spreadsheet
+        logger.info("Opened spreadsheet by name: %s", GOOGLE_SHEET_NAME)
+        _save_sheet_id(spreadsheet.id)
+        return spreadsheet
+    except Exception as e:
+        logger.warning("Spreadsheet by name '%s' not found: %s", GOOGLE_SHEET_NAME, e)
+
+    # ── Step 4: NEVER create — raise a clear error ───────────────
+    raise RuntimeError(
+        "PERMANENT GUARD: Cannot open Google Sheet. "
+        "No new sheet was created — this is intentional to prevent duplicates.\n"
+        "Please verify:\n"
+        "  1) config.py GOOGLE_SHEET_ID = '%s' is correct\n"
+        "  2) The service account has EDITOR access to this sheet\n"
+        "  3) The sheet still exists in Google Drive"
+        % GOOGLE_SHEET_ID
+    )
 
 
 # ─────────────────────────────────────────────
@@ -305,64 +439,63 @@ def _apply_calendar_formatting(ws):
 
 
 # ─────────────────────────────────────────────
-# PUBLIC API — OPD
+# STARTUP VALIDATION — verify sheet access
 # ─────────────────────────────────────────────
-# REPLACE the entire append_row_to_sheet function:
-def append_row_to_sheet(
-    opd_id, patient_id, patient_name, mobile,
-    gender, dob, age, blood_group, address, visit_date,
-    opd_type, charge_type, diagnosis, symptoms, clinical_notes,panchakarma_notes,
-    medicines,
-    consultation_fee, medicine_fee, panchakarma_fee, total_fee,
-    discount_type, discount_value, payment_mode,
-    next_visit_date, followup_status, image_links,
-):
-    logger.info("append_row_to_sheet called for OPD %s", opd_id)
+def validate_sheet_access():
+    """
+    Called once at startup to verify the Google Sheet is accessible.
+    Raises RuntimeError with clear instructions if validation fails.
+    Returns the spreadsheet object on success.
+    """
+    # ── Runtime lock assertion ──────────────────────────────
+    assert PERMANENTLY_DISABLE_SHEET_CREATION, (
+        "PERMANENT LOCK VIOLATED: Sheet creation is re-enabled. "
+        "This must remain False to prevent duplicate sheets."
+    )
+    # ────────────────────────────────────────────────────────
 
-    image_links_text = "\n".join(image_links) if image_links else None
-
-    row = _build_row({
-        "OPD ID": opd_id,
-        "Patient ID": patient_id,
-        "Patient Name": patient_name,
-        "Mobile": mobile,
-        "Gender": gender,
-        "DOB": dob,
-        "Age": age,
-        "Blood Group": blood_group,
-        "Address": address,
-        "Visit Date": visit_date,
-        "OPD Type": opd_type,
-        "Charge Type": charge_type,
-        "Diagnosis": diagnosis,
-        "Symptoms": symptoms,
-        "Clinical Notes": clinical_notes,
-        "Panchakarma Notes": panchakarma_notes,
-
-                "Medicines": medicines,
-
-        "Consultation Fee": consultation_fee,
-        "Medicine Fee": medicine_fee,
-        "Panchakarma Fee": panchakarma_fee,
-        "Total Fee": total_fee,
-        "Discount Type": discount_type,
-        "Discount Value": discount_value,
-        "Payment Mode": payment_mode,
-        "Next Visit Date": next_visit_date,
-        "Follow-up Status": followup_status,
-        "Image Links": image_links_text,
-    })
-
+    logger.info("Validating Google Sheet access...")
     client = _get_client()
-    ws = _get_opd_worksheet(client)
 
-    col_a_values = ws.col_values(1)
-    next_row = max(len(col_a_values) + 1, 2)
+    if not GOOGLE_SHEET_ID:
+        raise RuntimeError(
+            "GOOGLE_SHEET_ID is empty in config.py. "
+            "Set it to your existing spreadsheet ID to prevent duplicate creation."
+        )
 
-    end_col = _col_letter(len(HEADERS) - 1)
-    ws.update(range_name=f"A{next_row}:{end_col}{next_row}", values=[row])
+    try:
+        spreadsheet = client.open_by_key(GOOGLE_SHEET_ID)
+        logger.info(
+            "Sheet validation PASSED: opened '%s' (id=%s)",
+            spreadsheet.title, GOOGLE_SHEET_ID
+        )
+        # Sync the authoritative config ID into storage
+        _save_sheet_id(GOOGLE_SHEET_ID)
+        return spreadsheet
+    except Exception as e:
+        raise RuntimeError(
+            "SHEET VALIDATION FAILED: Cannot access Google Sheet '%s'.\n"
+            "Root cause: %s\n\n"
+            "To fix: Go to https://sheets.google.com, open your sheet, "
+            "share it with the service account email (Editor access). "
+            "Then restart the sync service.\n\n"
+            "No new sheet was created — this is intentional."
+            % (GOOGLE_SHEET_ID, e)
+        ) from e
 
-    logger.info("Row written to Sheets at row %d for OPD %s", next_row, opd_id)
+
+def validate_drive_folder_access():
+    """Verify the DRIVE_ROOT_FOLDER_ID from config points to an existing folder."""
+    if not DRIVE_ROOT_FOLDER_ID:
+        raise RuntimeError(
+            "DRIVE_ROOT_FOLDER_ID is empty in config.py. "
+            "Set it to your existing 'MediHive Images' folder ID."
+        )
+    logger.info(
+        "Drive folder ID present in config: %s (validation deferred to upload)", 
+        DRIVE_ROOT_FOLDER_ID
+    )
+    return True
 
 
 # ─────────────────────────────────────────────

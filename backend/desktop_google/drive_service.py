@@ -22,6 +22,7 @@ FOLDER STRUCTURE IN YOUR DRIVE:
 """
 
 import io
+import json
 from pathlib import Path
 
 from google.oauth2.credentials import Credentials
@@ -32,7 +33,8 @@ from googleapiclient.errors import HttpError
 
 from config import (
     DRIVE_ROOT_FOLDER_ID,
-    DRIVE_TOKEN_PATH
+    DRIVE_TOKEN_PATH,
+    DRIVE_TOKEN_JSON
 )
 from services.log_service import get_logger
 
@@ -43,30 +45,37 @@ SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 def get_drive_service():
     """
-    Load personal OAuth token from drive_token.json and return Drive API client.
-    drive_token.json is created by running: python generate_drive_token.py
+    Load personal OAuth token and return Drive API client.
+    Credentials can come from DRIVE_TOKEN_JSON env var (cloud) or drive_token.json file (local).
     Token auto-refreshes when expired — no manual action needed.
     """
     token_path = Path(DRIVE_TOKEN_PATH)
 
-    if not token_path.exists():
-        raise FileNotFoundError(
-            f"drive_token.json not found at: {DRIVE_TOKEN_PATH}\n"
-            "Run once from your project root:\n"
-            "  python generate_drive_token.py"
-        )
-
-    # Credentials.from_authorized_user_file reads the JSON token file
-    creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+    if DRIVE_TOKEN_JSON:
+        logger.info("Loading Drive token from DRIVE_TOKEN_JSON env var")
+        info = json.loads(DRIVE_TOKEN_JSON)
+        creds = Credentials.from_authorized_user_info(info, SCOPES)
+    else:
+        if not token_path.exists():
+            raise FileNotFoundError(
+                f"drive_token.json not found at: {DRIVE_TOKEN_PATH}\n"
+                "Run once from your project root:\n"
+                "  python generate_drive_token.py"
+            )
+        creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
 
     # Auto-refresh if expired
     if not creds.valid:
         if creds.expired and creds.refresh_token:
             logger.info("OAuth token expired — refreshing...")
             creds.refresh(Request())
-            with open(str(token_path), "w", encoding="utf-8") as f:
-                f.write(creds.to_json())
-            logger.info("Token refreshed and saved.")
+            token_str = creds.to_json()
+            if DRIVE_TOKEN_JSON:
+                pass  # Can't persist env var, logging is fine
+            else:
+                with open(str(token_path), "w", encoding="utf-8") as f:
+                    f.write(token_str)
+                logger.info("Token refreshed and saved.")
         else:
             raise RuntimeError(
                 "OAuth token is invalid and cannot be refreshed.\n"
