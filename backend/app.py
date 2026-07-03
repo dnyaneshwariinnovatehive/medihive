@@ -43,6 +43,13 @@ def create_app():
     def health():
         return {'status': 'ok', 'version': '1.0.0'}
 
+    @app.route('/', methods=['GET'])
+    def root():
+        return {
+            'message': 'MediHive Backend Running',
+            'health': '/api/health'
+        }
+
     @app.route('/debug-users', methods=['GET'])
     def debug_users():
         from database import get_db
@@ -211,9 +218,3 @@ if __name__ == '__main__':
         port=port,
         debug=False
     )
-@app.route('/', methods=['GET'])
-def root():
-    return {
-        'message': 'MediHive Backend Running',
-        'health': '/api/health'
-    }
