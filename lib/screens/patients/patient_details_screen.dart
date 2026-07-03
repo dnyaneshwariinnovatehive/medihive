@@ -61,20 +61,22 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
   }
 
   Future<void> _loadData() async {
-    final sqliteId =
-        int.tryParse(widget.patientId.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
-    if (sqliteId == 0) {
-      if (mounted) setState(() => _loaded = true);
-      return;
-    }
     final patientRepo = PatientRepository();
-    final patientRow = await patientRepo.getById(sqliteId);
+    var patientRow = await patientRepo.getBySyncId(widget.patientId);
+    patientRow ??= await _getPatientByLocalId(patientRepo);
+
     if (patientRow == null) {
       if (mounted) setState(() => _loaded = true);
       return;
     }
+
+    final sqliteId = patientRow['id'] as int;
+    final displayId = (patientRow['sync_id'] as String?)?.isNotEmpty == true
+        ? patientRow['sync_id'] as String
+        : 'P${sqliteId.toString().padLeft(3, '0')}';
+
     _patient = PatientDetail(
-      id: 'P$sqliteId',
+      id: displayId,
       name: (patientRow['full_name'] as String?) ?? '',
       age: (patientRow['age'] as int?) ?? 0,
       gender: (patientRow['gender'] as String?) ?? '',
@@ -88,10 +90,8 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
     _visits = _opdRows.map((r) {
       final consultation =
           int.tryParse(r['consultation_fee']?.toString() ?? '') ?? 0;
-      final medicine =
-          int.tryParse(r['medicine_fee']?.toString() ?? '') ?? 0;
-      final disc =
-          int.tryParse(r['discount_value']?.toString() ?? '') ?? 0;
+      final medicine = int.tryParse(r['medicine_fee']?.toString() ?? '') ?? 0;
+      final disc = int.tryParse(r['discount_value']?.toString() ?? '') ?? 0;
       final totalFee = consultation + medicine - disc;
       final visitDateStr = r['visit_datetime'] as String? ?? '';
       DateTime visitDate;
@@ -115,6 +115,15 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
       );
     }).toList();
     if (mounted) setState(() => _loaded = true);
+  }
+
+  Future<Map<String, dynamic>?> _getPatientByLocalId(
+    PatientRepository patientRepo,
+  ) async {
+    final sqliteId =
+        int.tryParse(widget.patientId.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+    if (sqliteId == 0) return null;
+    return patientRepo.getById(sqliteId);
   }
 
   Future<void> _confirmDeleteOpd(int index) async {
@@ -206,7 +215,10 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
         body: CustomScrollView(
           physics: const BouncingScrollPhysics(),
           slivers: [
-            const StandardHeader(title: 'Patient Details', roundedCorners: false),
+            const StandardHeader(
+              title: 'Patient Details',
+              roundedCorners: false,
+            ),
             const SliverFillRemaining(
               child: Center(child: Text('Patient not found')),
             ),
@@ -222,10 +234,7 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
       body: CustomScrollView(
         physics: const BouncingScrollPhysics(),
         slivers: [
-          const StandardHeader(
-            title: 'Patient Details',
-            roundedCorners: false,
-          ),
+          const StandardHeader(title: 'Patient Details', roundedCorners: false),
           SliverToBoxAdapter(
             child: Column(
               children: [
@@ -239,88 +248,94 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
                         bottomLeft: Radius.circular(28),
                         bottomRight: Radius.circular(28),
                       ),
-                      boxShadow: [...AppTheme.heavyShadow, ...AppTheme.subtleShadow],
+                      boxShadow: [
+                        ...AppTheme.heavyShadow,
+                        ...AppTheme.subtleShadow,
+                      ],
                     ),
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(16, 13, 16, 28),
-                    child: Column(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(20),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.10),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.15),
+                      child: Column(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(20),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.10),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.15),
+                              ),
                             ),
-                          ),
-                          child: Column(
-                            children: [
-                              Row(
-                                children: [
-                                  Hero(
-                                    tag: 'patient_avatar_${patient.id}',
-                                    child: CircleAvatar(
-                                      radius: 40,
-                                      backgroundColor: Colors.white,
-                                      child: Text(
-                                        patient.initial,
-                                        style: TextStyle(
-                                          fontSize: 32,
-                                          fontWeight: FontWeight.bold,
-                                          color: AppTheme.primary,
+                            child: Column(
+                              children: [
+                                Row(
+                                  children: [
+                                    Hero(
+                                      tag: 'patient_avatar_${patient.id}',
+                                      child: CircleAvatar(
+                                        radius: 40,
+                                        backgroundColor: Colors.white,
+                                        child: Text(
+                                          patient.initial,
+                                          style: TextStyle(
+                                            fontSize: 32,
+                                            fontWeight: FontWeight.bold,
+                                            color: AppTheme.primary,
+                                          ),
                                         ),
                                       ),
                                     ),
-                                  ),
-                                  SizedBox(width: 16),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          patient.name,
-                                          style: TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 22,
-                                            fontWeight: FontWeight.bold,
-                                            letterSpacing: -0.3,
-                                          ),
-                                        ),
-                                        SizedBox(height: 4),
-                                        Text(
-                                          '${patient.id} • ${patient.gender}',
-                                          style: TextStyle(
-                                            color: Colors.white.withValues(
-                                              alpha: 0.8,
+                                    SizedBox(width: 16),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            patient.name,
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 22,
+                                              fontWeight: FontWeight.bold,
+                                              letterSpacing: -0.3,
                                             ),
-                                            fontSize: 13,
                                           ),
-                                        ),
-                                      ],
+                                          SizedBox(height: 4),
+                                          Text(
+                                            '${patient.id} • ${patient.gender}',
+                                            style: TextStyle(
+                                              color: Colors.white.withValues(
+                                                alpha: 0.8,
+                                              ),
+                                              fontSize: 13,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ),
-                                  ),
-                                ],
-                              ),
-                              SizedBox(height: 16),
-                              Row(
-                                children: [
-                                  _glassTile('Age', '${patient.age} years'),
-                                  SizedBox(width: 12),
-                                  _glassTile('Blood Group', patient.bloodGroup),
-                                ],
-                              ),
-                            ],
+                                  ],
+                                ),
+                                SizedBox(height: 16),
+                                Row(
+                                  children: [
+                                    _glassTile('Age', '${patient.age} years'),
+                                    SizedBox(width: 12),
+                                    _glassTile(
+                                      'Blood Group',
+                                      patient.bloodGroup,
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(16),
+                Padding(
+                  padding: const EdgeInsets.all(16),
                   child: Column(
                     children: [
                       // Contact Info
@@ -396,8 +411,9 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
                             Expanded(
                               flex: 3,
                               child: ElevatedButton.icon(
-                                onPressed: () =>
-                                    context.go('/app/prescription/${widget.patientId}'),
+                                onPressed: () => context.go(
+                                  '/app/prescription/${widget.patientId}',
+                                ),
                                 icon: Icon(Icons.description, size: 20),
                                 label: Text('View Prescription'),
                                 style: ElevatedButton.styleFrom(
@@ -423,42 +439,84 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
                                     final latest = _opdRows.isNotEmpty
                                         ? _opdRows.first
                                         : null;
-                                    final settings = context.read<SettingsProvider>();
+                                    final settings = context
+                                        .read<SettingsProvider>();
 
                                     List<Medicine> medicines = [];
-                                    if (latest != null && (latest['medicines'] as String? ?? '').isNotEmpty) {
+                                    if (latest != null &&
+                                        (latest['medicines'] as String? ?? '')
+                                            .isNotEmpty) {
                                       try {
-                                        final decoded = _decodeMedicinesFromJson((latest['medicines'] as String? ?? ''));
+                                        final decoded =
+                                            _decodeMedicinesFromJson(
+                                              (latest['medicines'] as String? ??
+                                                  ''),
+                                            );
                                         if (decoded.isNotEmpty) {
-                                          medicines = decoded.map((m) => Medicine(
-                                            name: m['name'] ?? '',
-                                            dosage: m['dosage'] ?? '',
-                                            duration: m['duration'] ?? '',
-                                          )).toList();
-                                        } else {
-                                          medicines = (latest['medicines'] as String? ?? '').split(',')
-                                              .where((s) => s.trim().isNotEmpty)
-                                              .map((s) => Medicine(name: s.trim(), dosage: '', duration: ''))
+                                          medicines = decoded
+                                              .map(
+                                                (m) => Medicine(
+                                                  name: m['name'] ?? '',
+                                                  dosage: m['dosage'] ?? '',
+                                                  duration: m['duration'] ?? '',
+                                                ),
+                                              )
                                               .toList();
+                                        } else {
+                                          medicines =
+                                              (latest['medicines'] as String? ??
+                                                      '')
+                                                  .split(',')
+                                                  .where(
+                                                    (s) => s.trim().isNotEmpty,
+                                                  )
+                                                  .map(
+                                                    (s) => Medicine(
+                                                      name: s.trim(),
+                                                      dosage: '',
+                                                      duration: '',
+                                                    ),
+                                                  )
+                                                  .toList();
                                         }
                                       } catch (_) {
-                                        medicines = (latest['medicines'] as String? ?? '').split(',')
-                                            .where((s) => s.trim().isNotEmpty)
-                                            .map((s) => Medicine(name: s.trim(), dosage: '', duration: ''))
-                                            .toList();
+                                        medicines =
+                                            (latest['medicines'] as String? ??
+                                                    '')
+                                                .split(',')
+                                                .where(
+                                                  (s) => s.trim().isNotEmpty,
+                                                )
+                                                .map(
+                                                  (s) => Medicine(
+                                                    name: s.trim(),
+                                                    dosage: '',
+                                                    duration: '',
+                                                  ),
+                                                )
+                                                .toList();
                                       }
                                     }
 
                                     final rx = Prescription(
-                                      date: DateFormat('dd MMM yyyy').format(DateTime.now()),
+                                      date: DateFormat(
+                                        'dd MMM yyyy',
+                                      ).format(DateTime.now()),
                                       patientName: patient.name,
                                       patientId: patient.id,
                                       age: patient.age,
                                       gender: patient.gender,
-                                      diagnosis: latest?['diagnosis'] as String? ?? '',
+                                      diagnosis:
+                                          latest?['diagnosis'] as String? ?? '',
                                       medicines: medicines,
-                                      notes: latest?['clinical_notes'] as String? ?? '',
-                                      nextVisit: latest?['next_visit_date'] as String? ?? '',
+                                      notes:
+                                          latest?['clinical_notes']
+                                              as String? ??
+                                          '',
+                                      nextVisit:
+                                          latest?['next_visit_date']
+                                              as String? ??
+                                          '',
                                       doctorName: settings.doctorName,
                                       clinicName: settings.clinicName,
                                       clinicAddress: settings.clinicAddress,
@@ -467,22 +525,36 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
                                       patientMobile: patient.mobile,
                                     );
 
-                                    final pdfData = await PrescriptionPdfService.generatePdf(rx, includePatientDetails: false);
-                                    final normalizedPhone = Helpers.normalizePhone(patient.mobile);
+                                    final pdfData =
+                                        await PrescriptionPdfService.generatePdf(
+                                          rx,
+                                          includePatientDetails: false,
+                                        );
+                                    final normalizedPhone =
+                                        Helpers.normalizePhone(patient.mobile);
                                     if (normalizedPhone.isEmpty) {
                                       if (!context.mounted) return;
-                                      ScaffoldMessenger.of(context).showSnackBar(
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
                                         const SnackBar(
-                                          content: Text('Patient has no valid phone number'),
+                                          content: Text(
+                                            'Patient has no valid phone number',
+                                          ),
                                           behavior: SnackBarBehavior.floating,
                                         ),
                                       );
                                       return;
                                     }
 
-                                    final tempDir = await getTemporaryDirectory();
-                                    final safeName = patient.name.replaceAll(RegExp(r'[^\w\s-]'), '').replaceAll(RegExp(r'\s+'), '_');
-                                    final pdfFile = File('${tempDir.path}/${safeName}_${patient.id}.pdf');
+                                    final tempDir =
+                                        await getTemporaryDirectory();
+                                    final safeName = patient.name
+                                        .replaceAll(RegExp(r'[^\w\s-]'), '')
+                                        .replaceAll(RegExp(r'\s+'), '_');
+                                    final pdfFile = File(
+                                      '${tempDir.path}/${safeName}_${patient.id}.pdf',
+                                    );
                                     await pdfFile.writeAsBytes(pdfData);
 
                                     if (!context.mounted) return;
@@ -491,9 +563,12 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
                                       phoneNumber: normalizedPhone,
                                     );
 
+                                    if (!context.mounted) return;
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
-                                        content: Text('✓ WhatsApp opened with prescription attached'),
+                                        content: Text(
+                                          '✓ WhatsApp opened with prescription attached',
+                                        ),
                                         backgroundColor: AppTheme.success,
                                         behavior: SnackBarBehavior.floating,
                                         duration: const Duration(seconds: 4),
@@ -535,14 +610,18 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
                                     context: context,
                                     builder: (ctx) => AlertDialog(
                                       title: const Text('Delete Patient'),
-                                      content: Text('Delete ${patient.name} and all associated records?'),
+                                      content: Text(
+                                        'Delete ${patient.name} and all associated records?',
+                                      ),
                                       actions: [
                                         TextButton(
-                                          onPressed: () => Navigator.pop(ctx, false),
+                                          onPressed: () =>
+                                              Navigator.pop(ctx, false),
                                           child: const Text('Cancel'),
                                         ),
                                         TextButton(
-                                          onPressed: () => Navigator.pop(ctx, true),
+                                          onPressed: () =>
+                                              Navigator.pop(ctx, true),
                                           style: TextButton.styleFrom(
                                             foregroundColor: AppTheme.danger,
                                           ),
@@ -552,14 +631,20 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
                                     ),
                                   );
                                   if (confirmed == true && context.mounted) {
-                                    await context.read<PatientProvider>().deletePatientAndRecords(widget.patientId);
+                                    await context
+                                        .read<PatientProvider>()
+                                        .deletePatientAndRecords(
+                                          widget.patientId,
+                                        );
                                     if (context.mounted) {
                                       context.go('/app/patients');
                                     }
                                   }
                                 },
                                 style: OutlinedButton.styleFrom(
-                                  foregroundColor: AppTheme.danger.withValues(alpha: 0.7),
+                                  foregroundColor: AppTheme.danger.withValues(
+                                    alpha: 0.7,
+                                  ),
                                   padding: const EdgeInsets.symmetric(
                                     vertical: 16,
                                   ),
@@ -567,7 +652,9 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
                                     borderRadius: BorderRadius.circular(16),
                                   ),
                                   side: BorderSide(
-                                    color: AppTheme.danger.withValues(alpha: 0.2),
+                                    color: AppTheme.danger.withValues(
+                                      alpha: 0.2,
+                                    ),
                                     width: 1.5,
                                   ),
                                   elevation: 0,

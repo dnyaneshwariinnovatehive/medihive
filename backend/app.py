@@ -56,6 +56,88 @@ def create_app():
         finally:
             db.close()
 
+    @app.route('/debug-sync', methods=['GET'])
+    def debug_sync():
+        from database import get_db
+
+        db = get_db()
+        try:
+            patients = db.execute("SELECT COUNT(*) AS count FROM patients").fetchone()
+            opd_records = db.execute("SELECT COUNT(*) AS count FROM opd_records").fetchone()
+            recent_opd = db.execute(
+                """
+                SELECT id, patient_id, visit_date, image_links, updated_at
+                FROM opd_records
+                ORDER BY updated_at DESC
+                LIMIT 10
+                """
+            ).fetchall()
+            return {
+                'patients_count': patients['count'] if patients else 0,
+                'opd_records_count': opd_records['count'] if opd_records else 0,
+                'recent_opd_records': [dict(row) for row in recent_opd],
+            }
+        finally:
+            db.close()
+
+    @app.route('/debug-google', methods=['GET'])
+    def debug_google():
+        import os
+        from config import (
+            DRIVE_ROOT_FOLDER_ID,
+            DRIVE_TOKEN_JSON,
+            GOOGLE_CREDENTIALS_JSON,
+            GOOGLE_SHEET_ID,
+            IS_CLOUD,
+        )
+
+        result = {
+            'is_cloud': IS_CLOUD,
+            'google_sheet_id_set': bool(GOOGLE_SHEET_ID),
+            'google_credentials_json_set': bool(GOOGLE_CREDENTIALS_JSON),
+            'drive_root_folder_id_set': bool(DRIVE_ROOT_FOLDER_ID),
+            'drive_token_json_set': bool(DRIVE_TOKEN_JSON),
+            'medihive_cloud_env': os.environ.get('MEDIHIVE_CLOUD', ''),
+            'sheet_access': {'ok': False},
+            'drive_folder_access': {'ok': False},
+        }
+
+        try:
+            from desktop_google.sheets_service import validate_sheet_access
+
+            spreadsheet = validate_sheet_access()
+            result['sheet_access'] = {
+                'ok': True,
+                'title': spreadsheet.title,
+            }
+        except Exception as e:
+            result['sheet_access'] = {
+                'ok': False,
+                'error': str(e),
+            }
+
+        try:
+            from desktop_google.drive_service import get_drive_service
+
+            service = get_drive_service()
+            folder = service.files().get(
+                fileId=DRIVE_ROOT_FOLDER_ID,
+                fields='id,name,mimeType,trashed',
+            ).execute()
+            result['drive_folder_access'] = {
+                'ok': True,
+                'name': folder.get('name'),
+                'mime_type': folder.get('mimeType'),
+                'trashed': folder.get('trashed'),
+            }
+        except Exception as e:
+            result['drive_folder_access'] = {
+                'ok': False,
+                'error': str(e),
+            }
+
+        return result
+
     return app
 
 
@@ -95,6 +177,27 @@ except Exception as e:
 
 # initialize_google_services()
 logger.info("Google validation skipped for Railway deployment")
+try:
+    from config import (
+        DRIVE_ROOT_FOLDER_ID,
+        DRIVE_TOKEN_JSON,
+        GOOGLE_CREDENTIALS_JSON,
+        GOOGLE_SHEET_ID,
+        IS_CLOUD,
+    )
+
+    logger.info(
+        "Google config: IS_CLOUD=%s GOOGLE_SHEET_ID_SET=%s "
+        "GOOGLE_CREDENTIALS_JSON_SET=%s DRIVE_ROOT_FOLDER_ID_SET=%s "
+        "DRIVE_TOKEN_JSON_SET=%s",
+        IS_CLOUD,
+        bool(GOOGLE_SHEET_ID),
+        bool(GOOGLE_CREDENTIALS_JSON),
+        bool(DRIVE_ROOT_FOLDER_ID),
+        bool(DRIVE_TOKEN_JSON),
+    )
+except Exception as e:
+    logger.warning("Google config logging failed: %s", e)
 app = create_app()
 
 
