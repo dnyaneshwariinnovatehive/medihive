@@ -21,7 +21,7 @@ class Patient:
     @staticmethod
     def get(patient_id):
         db = get_db()
-        row = db.execute("SELECT * FROM patients WHERE id = ?", (patient_id,)).fetchone()
+        row = db.execute("SELECT * FROM patients WHERE id = %s", (patient_id,)).fetchone()
         db.close()
         return Patient.dict_from_row(row)
 
@@ -33,7 +33,7 @@ class Patient:
             INSERT INTO patients (id, name, dob, age, gender, blood_group, mobile, address,
                                   last_diagnosis, last_visit_date, created_at, updated_at,
                                   is_synced, user_id, clinic_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s)
         """, (
             data['id'], data['name'], data.get('dob', ''),
             data.get('age', 0), data.get('gender', 'Not Specified'),
@@ -58,15 +58,15 @@ class Patient:
         values = []
         for k in allowed:
             if k in data:
-                fields.append(f"{k} = ?")
+                fields.append(f"{k} = %s")
                 values.append(data[k])
         if not fields:
             return Patient.get(patient_id)
-        fields.append("updated_at = ?")
+        fields.append("updated_at = %s")
         values.append(now)
         values.append(patient_id)
         db = get_db()
-        db.execute(f"UPDATE patients SET {', '.join(fields)} WHERE id = ?", values)
+        db.execute(f"UPDATE patients SET {', '.join(fields)} WHERE id = %s", values)
         db.commit()
         db.close()
         return Patient.get(patient_id)
@@ -91,14 +91,14 @@ class Patient:
         from models.opd_record import OPDRecord
         db = get_db()
         opd_rows = db.execute(
-            "SELECT id FROM opd_records WHERE patient_id = ?", (patient_id,)
+            "SELECT id FROM opd_records WHERE patient_id = %s", (patient_id,)
         ).fetchall()
         db.close()
         for row in opd_rows:
             OPDRecord.delete(row['id'])
         DeletedEntity.record('patient', patient_id)
         db = get_db()
-        db.execute("DELETE FROM patients WHERE id = ?", (patient_id,))
+        db.execute("DELETE FROM patients WHERE id = %s", (patient_id,))
         db.commit()
         db.close()
 
@@ -113,7 +113,7 @@ class Patient:
     def by_clinic(clinic_id):
         db = get_db()
         rows = db.execute(
-            "SELECT * FROM patients WHERE clinic_id = ? ORDER BY updated_at DESC",
+            "SELECT * FROM patients WHERE clinic_id = %s ORDER BY updated_at DESC",
             (clinic_id,)
         ).fetchall()
         db.close()
@@ -124,17 +124,17 @@ class Patient:
         db = get_db()
         if clinic_id:
             rows = db.execute(
-                "SELECT * FROM patients WHERE updated_at > ? AND clinic_id = ? ORDER BY updated_at",
+                "SELECT * FROM patients WHERE updated_at > %s AND clinic_id = %s ORDER BY updated_at",
                 (timestamp, clinic_id)
             ).fetchall()
         elif user_id:
             rows = db.execute(
-                "SELECT * FROM patients WHERE updated_at > ? AND (user_id = ? OR user_id = '') ORDER BY updated_at",
+                "SELECT * FROM patients WHERE updated_at > %s AND (user_id = %s OR user_id = '') ORDER BY updated_at",
                 (timestamp, user_id)
             ).fetchall()
         else:
             rows = db.execute(
-                "SELECT * FROM patients WHERE updated_at > ? ORDER BY updated_at",
+                "SELECT * FROM patients WHERE updated_at > %s ORDER BY updated_at",
                 (timestamp,)
             ).fetchall()
         db.close()

@@ -1,0 +1,36 @@
+# Local development artifacts
+medihive.db
+medihive.db-wal
+medihive.db-shm
+sheet_id.json
+drive_token.json
+*.pyc
+__pycache__/
+.env
+.venv/
+venv/
+
+# IDE and OS files
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Dead code (obsolete architecture)
+desktop_google/auth_service.py
+desktop_google/auth_routes.py
+desktop_google/sync_service.py
+desktop_google/sync_queue.py
+desktop_google/image_service.py
+
+# Git
+.git/
+.gitignore
+
+# Local storage (not included in image)
+../storage/
+../credentials/
+
+# Documentation
+README.md

@@ -22,7 +22,7 @@ def login():
     db = get_db()
     hashed = hashlib.sha256(password.encode()).hexdigest()
     user = db.execute(
-        "SELECT * FROM users WHERE username = ? AND password = ?",
+        "SELECT * FROM users WHERE username = %s AND password = %s",
         (username, hashed)
     ).fetchone()
     db.close()
@@ -55,19 +55,19 @@ def register():
         return jsonify({'error': 'Username and password required'}), 400
 
     db = get_db()
-    existing = db.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+    existing = db.execute("SELECT id FROM users WHERE username = %s", (username,)).fetchone()
     if existing:
         db.close()
         return jsonify({'error': 'Username already exists'}), 409
 
     hashed = hashlib.sha256(password.encode()).hexdigest()
     now = datetime.utcnow().isoformat()
-    db.execute(
-        "INSERT INTO users (username, password, name, created_at) VALUES (?, ?, ?, ?)",
+    row = db.execute(
+        "INSERT INTO users (username, password, name, created_at) VALUES (%s, %s, %s, %s) RETURNING id",
         (username, hashed, name, now)
-    )
+    ).fetchone()
     db.commit()
-    user_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    user_id = row['id']
 
     token = create_access_token(identity=str(user_id))
     db.close()
@@ -88,7 +88,7 @@ def me():
     user_id = get_jwt_identity()
     db = get_db()
     user = db.execute(
-        "SELECT id, username, name, created_at FROM users WHERE id = ?",
+        "SELECT id, username, name, created_at FROM users WHERE id = %s",
         (user_id,)
     ).fetchone()
     db.close()

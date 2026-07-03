@@ -8,13 +8,25 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'medihive-secret-key-change-in-product
 JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'medihive-jwt-secret-change-in-production')
 JWT_ACCESS_TOKEN_EXPIRES = 86400  # 24 hours
 
-if IS_CLOUD:
-    DATABASE_PATH = os.environ.get(
-        'DATABASE_PATH',
-        os.path.join(BASE_DIR, 'medihive.db')
-    )
-else:
-    DATABASE_PATH = os.path.join(BASE_DIR, 'medihive.db')
+# PostgreSQL connection (Neon PostgreSQL on Cloud Run)
+# Format:
+#   postgresql://user:password@ep-xxxx-xxxx.us-east-2.aws.neon.tech/dbname?sslmode=require
+DATABASE_URL = os.environ.get(
+    'DATABASE_URL',
+    'postgresql://medihive:medihive@localhost:5432/medihive'
+)
+DB_POOL_MIN = int(os.environ.get('DB_POOL_MIN', '0'))
+DB_POOL_MAX = int(os.environ.get('DB_POOL_MAX', '5'))
+# Neon auto-suspend: idle compute suspends after 5 min.
+# First connection after suspend may take 1-3s cold start.
+# The pool handles this with automatic retries.
+CONNECT_TIMEOUT = int(os.environ.get('CONNECT_TIMEOUT', '10'))
+
+# Legacy SQLite path — retained for test compatibility, not used in production
+DATABASE_PATH = os.environ.get(
+    'DATABASE_PATH',
+    os.path.join(BASE_DIR, 'medihive.db')
+)
 
 # WhatsApp Cloud API
 WHATSAPP_TOKEN = os.environ.get('WHATSAPP_TOKEN', '')

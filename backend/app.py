@@ -1,3 +1,4 @@
+import os
 from flask import Flask
 from flask_jwt_extended import JWTManager
 from flask_cors import CORS
@@ -71,9 +72,23 @@ def initialize_google_services():
         logger.critical("Google setup validation error: %s", e)
 
 
-init_db()
+try:
+    init_db()
+    logger.info("Database initialized successfully")
+except Exception as e:
+    logger.critical("Database initialization failed: %s", e)
+    # On Cloud Run, Cloud SQL must be reachable. On local dev,
+    # ensure PostgreSQL is running or DATABASE_URL is configured.
+
 initialize_google_services()
 app = create_app()
 
+import os
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    port = int(os.environ.get("PORT", 8080))
+    app.run(
+        host='0.0.0.0',
+        port=port,
+        debug=False
+    )

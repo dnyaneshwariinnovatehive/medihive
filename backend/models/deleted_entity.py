@@ -11,7 +11,7 @@ class DeletedEntity:
         try:
             db.execute(
                 "INSERT INTO deleted_entities (entity_type, entity_id, deleted_at, user_id, clinic_id) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "VALUES (%s, %s, %s, %s, %s)",
                 (entity_type, entity_id, now, user_id, clinic_id)
             )
             db.commit()
@@ -24,21 +24,21 @@ class DeletedEntity:
         if clinic_id:
             rows = db.execute(
                 "SELECT entity_type, entity_id, deleted_at FROM deleted_entities "
-                "WHERE deleted_at > ? AND clinic_id = ? "
+                "WHERE deleted_at > %s AND clinic_id = %s "
                 "ORDER BY deleted_at",
                 (timestamp, clinic_id)
             ).fetchall()
         elif user_id:
             rows = db.execute(
                 "SELECT entity_type, entity_id, deleted_at FROM deleted_entities "
-                "WHERE deleted_at > ? AND (user_id = ? OR user_id = '') "
+                "WHERE deleted_at > %s AND (user_id = %s OR user_id = '') "
                 "ORDER BY deleted_at",
                 (timestamp, user_id)
             ).fetchall()
         else:
             rows = db.execute(
                 "SELECT entity_type, entity_id, deleted_at FROM deleted_entities "
-                "WHERE deleted_at > ? ORDER BY deleted_at",
+                "WHERE deleted_at > %s ORDER BY deleted_at",
                 (timestamp,)
             ).fetchall()
         db.close()

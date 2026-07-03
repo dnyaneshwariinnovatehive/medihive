@@ -18,9 +18,9 @@ from datetime import date, datetime
 import gspread
 from google.oauth2.service_account import Credentials
 
-from config import GOOGLE_CREDENTIALS_PATH, GOOGLE_CREDENTIALS_JSON, GOOGLE_SHEET_NAME, GOOGLE_SHEET_ID, SHEET_ID_FILE, DATABASE_PATH, DRIVE_ROOT_FOLDER_ID
+from config import GOOGLE_CREDENTIALS_PATH, GOOGLE_CREDENTIALS_JSON, GOOGLE_SHEET_NAME, GOOGLE_SHEET_ID, SHEET_ID_FILE, DRIVE_ROOT_FOLDER_ID
+from database import get_db
 from services.log_service import get_logger
-import sqlite3
 
 logger = get_logger(__name__)
 
@@ -103,36 +103,36 @@ def _build_row(data: dict) -> list:
 # SHEET ID PERSISTENCE (SQLite + file fallback)
 # ─────────────────────────────────────────────
 def _load_sheet_id_from_db():
-    """Load the spreadsheet ID from the SQLite settings table."""
+    """Load the spreadsheet ID from the settings table."""
     try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        row = conn.execute(
+        db = get_db()
+        row = db.execute(
             "SELECT value FROM settings WHERE key = 'spreadsheet_id'"
         ).fetchone()
-        conn.close()
-        if row and row[0]:
-            sid = row[0]
-            logger.info("Loaded sheet ID from SQLite: %s", sid)
+        db.close()
+        if row and row['value']:
+            sid = row['value']
+            logger.info("Loaded sheet ID from database: %s", sid)
             return sid
     except Exception as e:
-        logger.warning("Could not load sheet ID from SQLite: %s", e)
+        logger.warning("Could not load sheet ID from database: %s", e)
     return None
 
 
 def _save_sheet_id_to_db(spreadsheet_id):
-    """Persist the spreadsheet ID in the SQLite settings table."""
+    """Persist the spreadsheet ID in the settings table."""
     try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        db = get_db()
+        db.execute(
+            "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
             ('spreadsheet_id', spreadsheet_id)
         )
-        conn.commit()
-        conn.close()
-        logger.info("Persisted sheet ID to SQLite: %s", spreadsheet_id)
+        db.commit()
+        db.close()
+        logger.info("Persisted sheet ID to database: %s", spreadsheet_id)
         return True
     except Exception as e:
-        logger.warning("Could not save sheet ID to SQLite: %s", e)
+        logger.warning("Could not save sheet ID to database: %s", e)
     return False
 
 
@@ -602,20 +602,19 @@ def clear_opd_sheet_data():
     ws.update(range_name=f"A1:{end_col}1", values=[HEADERS])
     _apply_opd_formatting(ws)
 
-    # ── Clear backend SQLite OPD records & patients ──
+    # ── Clear backend OPD records & patients ──
     try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM opd_records")
-        cursor.execute("DELETE FROM patients")
-        cursor.execute("DELETE FROM deleted_entities")
-        cursor.execute("DELETE FROM last_sync")
-        cursor.execute("DELETE FROM settings WHERE key = 'spreadsheet_id'")
-        conn.commit()
-        conn.close()
-        logger.info("Backend SQLite cleared (opd_records, patients, deleted_entities, last_sync)")
+        db = get_db()
+        db.execute("DELETE FROM opd_records")
+        db.execute("DELETE FROM patients")
+        db.execute("DELETE FROM deleted_entities")
+        db.execute("DELETE FROM last_sync")
+        db.execute("DELETE FROM settings WHERE key = 'spreadsheet_id'")
+        db.commit()
+        db.close()
+        logger.info("Backend database cleared (opd_records, patients, deleted_entities, last_sync)")
     except Exception as e:
-        logger.error("Failed to clear backend SQLite: %s", e)
+        logger.error("Failed to clear backend database: %s", e)
 
     return row_count
 

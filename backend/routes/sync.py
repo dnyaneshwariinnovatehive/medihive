@@ -37,9 +37,10 @@ def _sync_opd_to_sheets(opd, image_links=None):
         now = datetime.utcnow().isoformat()
         db = get_db()
         db.execute("""
-            INSERT OR IGNORE INTO patients
+            INSERT INTO patients
                 (id, name, mobile, gender, created_at, updated_at, is_synced)
-            VALUES (?, ?, ?, ?, ?, ?, 0)
+            VALUES (%s, %s, %s, %s, %s, %s, 0)
+            ON CONFLICT DO NOTHING
         """, (
             opd.get('patient_id'), 'Unknown (Auto-created)',
             '', 'Not Specified', now, now,
@@ -76,16 +77,16 @@ def pull():
     db = get_db()
     now = datetime.utcnow().isoformat()
     existing = db.execute(
-        "SELECT id FROM last_sync WHERE user_id = ?", (user_id,)
+        "SELECT id FROM last_sync WHERE user_id = %s", (user_id,)
     ).fetchone()
     if existing:
         db.execute(
-            "UPDATE last_sync SET last_sync = ?, updated_at = ? WHERE user_id = ?",
+            "UPDATE last_sync SET last_sync = %s, updated_at = %s WHERE user_id = %s",
             (last_sync, now, user_id)
         )
     else:
         db.execute(
-            "INSERT INTO last_sync (user_id, last_sync, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO last_sync (user_id, last_sync, created_at, updated_at) VALUES (%s, %s, %s, %s)",
             (user_id, last_sync, now, now)
         )
     db.commit()
@@ -313,7 +314,7 @@ def clear_all_data():
         # Re-create default user
         try:
             db.execute(
-                "INSERT OR IGNORE INTO users (username, password, name, created_at) VALUES (?, ?, ?, ?)",
+                "INSERT INTO users (username, password, name, created_at) VALUES (%s, %s, %s, %s) ON CONFLICT (username) DO NOTHING",
                 ('admin', generate_password_hash('admin123'), 'Admin', now)
             )
             db.commit()

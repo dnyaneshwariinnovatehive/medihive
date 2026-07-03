@@ -154,6 +154,12 @@ def upload_opd_images(opd_id):
         logger.warning("No valid image files for OPD %s", opd_id)
         return jsonify({'error': 'No valid image files provided'}), 400
 
+    try:
+        visit_date = datetime.fromisoformat(opd['visit_date'])
+    except (ValueError, TypeError):
+        logger.warning("Could not parse visit_date '%s', using current time", opd.get('visit_date'))
+        visit_date = datetime.utcnow()
+
     if IS_CLOUD:
         logger.info("Cloud mode: uploading %d image(s) directly to Drive for OPD %s", len(files), opd_id)
         drive_urls = []
@@ -170,12 +176,6 @@ def upload_opd_images(opd_id):
         logger.info("Uploading %d image(s) to Google Drive for OPD %s", len(image_records), opd_id)
         drive_urls = upload_images_to_drive(opd_id, image_records, visit_date)
         logger.info("Uploaded %d image(s) to Drive for OPD %s", len(drive_urls), opd_id)
-
-    try:
-        visit_date = datetime.fromisoformat(opd['visit_date'])
-    except (ValueError, TypeError):
-        logger.warning("Could not parse visit_date '%s', using current time", opd.get('visit_date'))
-        visit_date = datetime.utcnow()
 
     patient = Patient.get(opd['patient_id'])
     if patient is None:

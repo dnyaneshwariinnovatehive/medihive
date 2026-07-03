@@ -16,7 +16,7 @@ class Appointment:
         db = get_db()
         if date:
             rows = db.execute(
-                "SELECT * FROM appointments WHERE date(date_time) = ? ORDER BY date_time",
+                "SELECT * FROM appointments WHERE CAST(date_time AS DATE) = %s ORDER BY date_time",
                 (date,)
             ).fetchall()
         else:
@@ -27,7 +27,7 @@ class Appointment:
     @staticmethod
     def get(appt_id):
         db = get_db()
-        row = db.execute("SELECT * FROM appointments WHERE id = ?", (appt_id,)).fetchone()
+        row = db.execute("SELECT * FROM appointments WHERE id = %s", (appt_id,)).fetchone()
         db.close()
         return Appointment.dict_from_row(row)
 
@@ -38,7 +38,7 @@ class Appointment:
         db.execute("""
             INSERT INTO appointments (id, patient_id, patient_name, date_time, notes,
                                       created_at, updated_at, is_synced, user_id, clinic_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 0, %s, %s)
         """, (
             data['id'], data.get('patient_id', ''),
             data.get('patient_name', ''), data['date_time'],
@@ -59,15 +59,15 @@ class Appointment:
         values = []
         for k in allowed:
             if k in data:
-                fields.append(f"{k} = ?")
+                fields.append(f"{k} = %s")
                 values.append(data[k])
         if not fields:
             return Appointment.get(appt_id)
-        fields.append("updated_at = ?")
+        fields.append("updated_at = %s")
         values.append(now)
         values.append(appt_id)
         db = get_db()
-        db.execute(f"UPDATE appointments SET {', '.join(fields)} WHERE id = ?", values)
+        db.execute(f"UPDATE appointments SET {', '.join(fields)} WHERE id = %s", values)
         db.commit()
         db.close()
         return Appointment.get(appt_id)
@@ -77,7 +77,7 @@ class Appointment:
         from models.deleted_entity import DeletedEntity
         DeletedEntity.record('appointment', appt_id)
         db = get_db()
-        db.execute("DELETE FROM appointments WHERE id = ?", (appt_id,))
+        db.execute("DELETE FROM appointments WHERE id = %s", (appt_id,))
         db.commit()
         db.close()
 
@@ -92,7 +92,7 @@ class Appointment:
     def by_clinic(clinic_id):
         db = get_db()
         rows = db.execute(
-            "SELECT * FROM appointments WHERE clinic_id = ? ORDER BY updated_at DESC",
+            "SELECT * FROM appointments WHERE clinic_id = %s ORDER BY updated_at DESC",
             (clinic_id,)
         ).fetchall()
         db.close()
@@ -103,17 +103,17 @@ class Appointment:
         db = get_db()
         if clinic_id:
             rows = db.execute(
-                "SELECT * FROM appointments WHERE updated_at > ? AND clinic_id = ? ORDER BY updated_at",
+                "SELECT * FROM appointments WHERE updated_at > %s AND clinic_id = %s ORDER BY updated_at",
                 (timestamp, clinic_id)
             ).fetchall()
         elif user_id:
             rows = db.execute(
-                "SELECT * FROM appointments WHERE updated_at > ? AND (user_id = ? OR user_id = '') ORDER BY updated_at",
+                "SELECT * FROM appointments WHERE updated_at > %s AND (user_id = %s OR user_id = '') ORDER BY updated_at",
                 (timestamp, user_id)
             ).fetchall()
         else:
             rows = db.execute(
-                "SELECT * FROM appointments WHERE updated_at > ? ORDER BY updated_at",
+                "SELECT * FROM appointments WHERE updated_at > %s ORDER BY updated_at",
                 (timestamp,)
             ).fetchall()
         db.close()

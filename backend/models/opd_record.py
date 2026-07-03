@@ -16,7 +16,7 @@ class OPDRecord:
         db = get_db()
         if patient_id:
             rows = db.execute(
-                "SELECT * FROM opd_records WHERE patient_id = ? ORDER BY visit_date DESC",
+                "SELECT * FROM opd_records WHERE patient_id = %s ORDER BY visit_date DESC",
                 (patient_id,)
             ).fetchall()
         else:
@@ -27,7 +27,7 @@ class OPDRecord:
     @staticmethod
     def get(record_id):
         db = get_db()
-        row = db.execute("SELECT * FROM opd_records WHERE id = ?", (record_id,)).fetchone()
+        row = db.execute("SELECT * FROM opd_records WHERE id = %s", (record_id,)).fetchone()
         db.close()
         return OPDRecord.dict_from_row(row)
 
@@ -41,7 +41,7 @@ class OPDRecord:
                 payment_mode, charge_type, previous_visit_date, follow_up_reason,
                 next_visit, blood_group, image_links, created_at, updated_at,
                 is_synced, user_id, clinic_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s)
         """, (
             data['id'], data['patient_id'], data.get('type', 'consultation'),
             data.get('symptoms', ''), data.get('diagnosis', ''),
@@ -72,15 +72,15 @@ class OPDRecord:
         values = []
         for k in allowed:
             if k in data:
-                fields.append(f"{k} = ?")
+                fields.append(f"{k} = %s")
                 values.append(data[k])
         if not fields:
             return OPDRecord.get(record_id)
-        fields.append("updated_at = ?")
+        fields.append("updated_at = %s")
         values.append(now)
         values.append(record_id)
         db = get_db()
-        db.execute(f"UPDATE opd_records SET {', '.join(fields)} WHERE id = ?", values)
+        db.execute(f"UPDATE opd_records SET {', '.join(fields)} WHERE id = %s", values)
         db.commit()
         db.close()
         return OPDRecord.get(record_id)
@@ -90,7 +90,7 @@ class OPDRecord:
         from models.deleted_entity import DeletedEntity
         DeletedEntity.record('opd_visit', record_id)
         db = get_db()
-        db.execute("DELETE FROM opd_records WHERE id = ?", (record_id,))
+        db.execute("DELETE FROM opd_records WHERE id = %s", (record_id,))
         db.commit()
         db.close()
 
@@ -106,7 +106,7 @@ class OPDRecord:
         now = datetime.utcnow().isoformat()
         db = get_db()
         db.execute(
-            "UPDATE opd_records SET image_links = ?, updated_at = ? WHERE id = ?",
+            "UPDATE opd_records SET image_links = %s, updated_at = %s WHERE id = %s",
             (links_text, now, record_id)
         )
         db.commit()
@@ -116,7 +116,7 @@ class OPDRecord:
     def by_clinic(clinic_id):
         db = get_db()
         rows = db.execute(
-            "SELECT * FROM opd_records WHERE clinic_id = ? ORDER BY updated_at DESC",
+            "SELECT * FROM opd_records WHERE clinic_id = %s ORDER BY updated_at DESC",
             (clinic_id,)
         ).fetchall()
         db.close()
@@ -127,17 +127,17 @@ class OPDRecord:
         db = get_db()
         if clinic_id:
             rows = db.execute(
-                "SELECT * FROM opd_records WHERE updated_at > ? AND clinic_id = ? ORDER BY updated_at",
+                "SELECT * FROM opd_records WHERE updated_at > %s AND clinic_id = %s ORDER BY updated_at",
                 (timestamp, clinic_id)
             ).fetchall()
         elif user_id:
             rows = db.execute(
-                "SELECT * FROM opd_records WHERE updated_at > ? AND (user_id = ? OR user_id = '') ORDER BY updated_at",
+                "SELECT * FROM opd_records WHERE updated_at > %s AND (user_id = %s OR user_id = '') ORDER BY updated_at",
                 (timestamp, user_id)
             ).fetchall()
         else:
             rows = db.execute(
-                "SELECT * FROM opd_records WHERE updated_at > ? ORDER BY updated_at",
+                "SELECT * FROM opd_records WHERE updated_at > %s ORDER BY updated_at",
                 (timestamp,)
             ).fetchall()
         db.close()
