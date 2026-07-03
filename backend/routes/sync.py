@@ -299,7 +299,13 @@ def clear_all_data():
     logger.warning("CLEAR ALL DATA requested by user %s", get_jwt_identity())
 
     try:
-        from database import get_db
+        from database import (
+            DEFAULT_ADMIN_NAME,
+            DEFAULT_ADMIN_PASSWORD,
+            DEFAULT_ADMIN_USERNAME,
+            get_db,
+        )
+        import hashlib
 
         rows_cleared = clear_opd_sheet_data()
 
@@ -307,15 +313,22 @@ def clear_all_data():
         db = get_db()
 
         # Re-create the default admin user if it was deleted
-        from werkzeug.security import generate_password_hash
         from datetime import datetime
         now = datetime.utcnow().isoformat()
+        default_admin_password_hash = hashlib.sha256(
+            DEFAULT_ADMIN_PASSWORD.encode()
+        ).hexdigest()
 
         # Re-create default user
         try:
             db.execute(
                 "INSERT INTO users (username, password, name, created_at) VALUES (%s, %s, %s, %s) ON CONFLICT (username) DO NOTHING",
-                ('admin', generate_password_hash('admin123'), 'Admin', now)
+                (
+                    DEFAULT_ADMIN_USERNAME,
+                    default_admin_password_hash,
+                    DEFAULT_ADMIN_NAME,
+                    now,
+                )
             )
             db.commit()
         except Exception:

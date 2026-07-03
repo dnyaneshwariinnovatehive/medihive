@@ -1,6 +1,8 @@
 import os
 import time
 import logging
+import hashlib
+from datetime import datetime
 import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
@@ -10,6 +12,10 @@ logger = logging.getLogger(__name__)
 
 _pool = None
 _pool_lock = False
+
+DEFAULT_ADMIN_USERNAME = 'admin_medihive'
+DEFAULT_ADMIN_PASSWORD = '1234567890'
+DEFAULT_ADMIN_NAME = 'Admin'
 
 
 def _build_connection_kwargs():
@@ -196,6 +202,24 @@ def init_db():
                 clinic_id   TEXT DEFAULT ''
             );
         """)
+        default_admin_password_hash = hashlib.sha256(
+            DEFAULT_ADMIN_PASSWORD.encode()
+        ).hexdigest()
+        db.execute(
+            """
+            INSERT INTO users (username, password, name, created_at)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (username) DO UPDATE SET
+                password = EXCLUDED.password,
+                name = EXCLUDED.name
+            """,
+            (
+                DEFAULT_ADMIN_USERNAME,
+                default_admin_password_hash,
+                DEFAULT_ADMIN_NAME,
+                datetime.utcnow().isoformat(),
+            ),
+        )
         db.execute("""
             CREATE TABLE IF NOT EXISTS fcm_tokens (
                 id          SERIAL PRIMARY KEY,
