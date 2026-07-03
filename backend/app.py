@@ -101,3 +101,12 @@ def root():
         'message': 'MediHive Backend Running',
         'health': '/api/health'
     }
+
+@app.route('/debug-users')
+def debug_users():
+    from database import get_db
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM users")
+    rows = cur.fetchall()
+    return {"users": [str(r) for r in rows]}
