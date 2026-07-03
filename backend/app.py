@@ -95,3 +95,9 @@ if __name__ == '__main__':
         port=port,
         debug=False
     )
+@app.route('/', methods=['GET'])
+def root():
+    return {
+        'message': 'MediHive Backend Running',
+        'health': '/api/health'
+    }
