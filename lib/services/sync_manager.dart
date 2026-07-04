@@ -604,9 +604,17 @@ class SyncManager extends ChangeNotifier {
     // ── Pull ─────────────────────────────────────────
     debugPrint('SYNC PULL START (lastSync=$lastSync)');
 
-    try {
-      final data = await ApiService.syncPull(lastSync);
-      debugPrint('SYNC PULL SUCCESS');
+    // On first ever sync (fresh install), skip pull to avoid
+    // populating a new device with all remote cloud data.
+    // Subsequent syncs will pull incrementally using stored lastSync.
+    if (lastSync.isEmpty) {
+      debugPrint('SYNC PULL: first sync — skipping pull to keep fresh install clean');
+      final now = DateTime.now().toUtc().toIso8601String();
+      await prefs.setString('last_flask_sync', now);
+    } else {
+      try {
+        final data = await ApiService.syncPull(lastSync);
+        debugPrint('SYNC PULL SUCCESS');
 
       final remotePatients = data['patients'] as List<dynamic>? ?? [];
       final remoteOpd = data['opd_records'] as List<dynamic>? ?? [];
@@ -754,6 +762,7 @@ class SyncManager extends ChangeNotifier {
       );
     } catch (_) {
       // Pull might fail — push already succeeded
+    }
     }
   }
 

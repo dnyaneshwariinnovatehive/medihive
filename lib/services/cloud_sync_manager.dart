@@ -379,6 +379,17 @@ class CloudSyncManager extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final lastSync = prefs.getString('last_cloud_sync') ?? '';
 
+    // On first ever sync (fresh install), skip download to avoid
+    // populating a new device with all remote cloud data. Only upload
+    // local changes should happen. Subsequent syncs will download
+    // incrementally using the stored lastSync timestamp.
+    if (lastSync.isEmpty) {
+      debugPrint('CLOUD DOWNLOAD: first sync — skipping download to keep fresh install clean');
+      final now = DateTime.now().toUtc().toIso8601String();
+      await prefs.setString('last_cloud_sync', now);
+      return;
+    }
+
     debugPrint('CLOUD DEVICE DEBUG: download clinic_id=$_clinicId device_id=$_deviceId last_sync=$lastSync');
 
     final response = await ApiService.cloudDownload(
