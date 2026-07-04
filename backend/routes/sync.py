@@ -135,6 +135,28 @@ def push():
         patient = Patient.upsert(p)
         results['patients'].append(patient)
 
+    # Re-sync all existing OPD records for this patient so that
+    # patient columns (name, mobile, blood group, address, etc.)
+    # are updated in Google Sheets immediately.
+    re_synced_opds = 0
+    for p in data.get('patients', []):
+        pat_id = p.get('id', '')
+        if pat_id and not pat_id.startswith('TEMP_'):
+            for opd in OPDRecord.all(patient_id=pat_id):
+                try:
+                    _sync_opd_to_sheets(opd)
+                    re_synced_opds += 1
+                except Exception as e:
+                    logger.warning(
+                        "Patient-edit re-sync failed for OPD %s: %s",
+                        opd['id'], e,
+                    )
+    if re_synced_opds:
+        logger.info(
+            "Re-synced %d OPD records to sheets after patient edits",
+            re_synced_opds,
+        )
+
     sheet_errors = []
     for r in data.get('opd_records', []):
         r['user_id'] = user_id

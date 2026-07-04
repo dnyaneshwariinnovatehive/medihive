@@ -256,9 +256,11 @@ class SyncManager extends ChangeNotifier {
     final visitDt = row['visit_datetime'] as String? ?? '';
     final localPatientId = row['patient_id'] as int? ?? 0;
     String patientSyncId;
+    String patientBloodGroup = '';
     try {
       final patient = await _patientRepo.getById(localPatientId);
       patientSyncId = patient?['sync_id'] as String? ?? _patientToStringId(localPatientId);
+      patientBloodGroup = patient?['blood_group'] as String? ?? '';
     } catch (_) {
       patientSyncId = _patientToStringId(localPatientId);
     }
@@ -279,7 +281,7 @@ class SyncManager extends ChangeNotifier {
       'previous_visit_date': '',
       'follow_up_reason': row['followup_status'] ?? '',
       'next_visit': row['next_visit_date'] ?? '',
-      'blood_group': '',
+      'blood_group': patientBloodGroup,
       'created_at': createdDt.toIso8601String(),
       'updated_at': _resolveUpdatedAt(row),
       'is_synced': 1,

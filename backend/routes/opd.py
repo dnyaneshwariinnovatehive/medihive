@@ -111,7 +111,7 @@ def build_sheet_row_data(opd, patient, drive_urls):
         'Gender': patient.get('gender', ''),
         'DOB': patient.get('dob', ''),
         'Age': patient.get('age', 0),
-        'Blood Group': opd.get('blood_group', ''),
+        'Blood Group': patient.get('blood_group', '') or opd.get('blood_group', ''),
         'Address': patient.get('address', ''),
         'Visit Date': opd.get('visit_date', ''),
         'OPD Type': opd.get('type', 'consultation'),
