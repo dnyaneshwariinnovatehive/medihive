@@ -18,7 +18,7 @@ class OpdQueueScreen extends StatefulWidget {
 }
 
 class _OpdQueueScreenState extends State<OpdQueueScreen> {
-  DateTime? _selectedDate;
+  DateTime _selectedDate = DateTime.now();
   List<Map<String, dynamic>> _records = [];
   Map<int, Map<String, dynamic>> _patientMap = {};
   bool _loaded = false;
@@ -39,11 +39,7 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
       _patientMap = {
         for (final p in allPatients) (p['id'] as int): p,
       };
-      if (_selectedDate != null) {
-        _records = await opdRepo.getByDate(_selectedDate!);
-      } else {
-        _records = await opdRepo.getAll();
-      }
+      _records = await opdRepo.getByDate(_selectedDate);
     } catch (_) {
       _records = [];
       _patientMap = {};
@@ -66,9 +62,9 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
   Future<void> _pickDate() async {
     final picked = await showDatePicker(
       context: context,
-      initialDate: _selectedDate ?? DateTime.now(),
+      initialDate: _selectedDate,
       firstDate: DateTime(2020),
-      lastDate: DateTime.now().add(const Duration(days: 365)),
+      lastDate: DateTime.now(),
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(
@@ -87,17 +83,11 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
     }
   }
 
-  void _clearDateFilter() {
-    setState(() => _selectedDate = null);
-    _loadData();
-  }
-
   bool get _isToday {
-    if (_selectedDate == null) return false;
     final now = DateTime.now();
-    return _selectedDate!.year == now.year &&
-        _selectedDate!.month == now.month &&
-        _selectedDate!.day == now.day;
+    return _selectedDate.year == now.year &&
+        _selectedDate.month == now.month &&
+        _selectedDate.day == now.day;
   }
 
   Widget _buildTypeCapsule(Map<String, dynamic> record) {
@@ -155,68 +145,49 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
                     ),
                     child: Row(
                       children: [
-                        GestureDetector(
-                          onTap: _clearDateFilter,
-                          child: Container(
-                            padding: const EdgeInsets.all(7),
-                            decoration: BoxDecoration(
-                              color: AppTheme.primary.withValues(alpha: 0.08),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Icon(
-                              _selectedDate != null
-                                  ? Icons.calendar_month_rounded
-                                  : Icons.list_rounded,
-                              color: AppTheme.primary,
-                              size: 20,
-                            ),
+                        Container(
+                          padding: const EdgeInsets.all(7),
+                          decoration: BoxDecoration(
+                            color: AppTheme.primary.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Icon(
+                            Icons.calendar_month_rounded,
+                            color: AppTheme.primary,
+                            size: 20,
                           ),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
-                          child: GestureDetector(
-                            onTap: _selectedDate != null ? _clearDateFilter : null,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  _selectedDate != null
-                                      ? DateFormat('EEEE, d MMMM yyyy').format(
-                                          _selectedDate!,
-                                        )
-                                      : 'All Records',
-                                  style: AppTheme.body.copyWith(
-                                    fontWeight: FontWeight.bold,
-                                    color: AppTheme.textPrimary,
-                                    fontSize: 14,
-                                  ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                DateFormat('EEEE, d MMMM yyyy').format(
+                                  _selectedDate,
                                 ),
-                                const SizedBox(height: 1),
-                                Text(
-                                  _selectedDate != null
-                                      ? (_isToday ? 'Today — tap to show all' : 'Tap to show all')
-                                      : 'Tap calendar icon to filter by date',
-                                  style: AppTheme.caption.copyWith(
-                                    color: AppTheme.textSecondary,
-                                    fontSize: 11,
-                                  ),
+                                style: AppTheme.body.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  color: AppTheme.textPrimary,
+                                  fontSize: 14,
                                 ),
-                              ],
-                            ),
+                              ),
+                              const SizedBox(height: 1),
+                              Text(
+                                _isToday ? 'Today' : 'Selected date',
+                                style: AppTheme.caption.copyWith(
+                                  color: AppTheme.textSecondary,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        if (_selectedDate != null)
-                          GestureDetector(
-                            onTap: _clearDateFilter,
-                            child: Padding(
-                              padding: const EdgeInsets.only(left: 4),
-                              child: Icon(
-                                Icons.close,
-                                size: 18,
-                                color: AppTheme.textSecondary,
-                              ),
-                            ),
-                          ),
+                        const SizedBox(width: 4),
+                        Icon(
+                          Icons.arrow_drop_down,
+                          color: AppTheme.textSecondary,
+                        ),
                       ],
                     ),
                   ),
@@ -258,23 +229,23 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
                             ),
                             const SizedBox(height: 16),
                               Text(
-                                _selectedDate != null
-                                    ? 'No appointments scheduled for this day.'
-                                    : 'No OPD records found.',
+                                _isToday
+                                    ? 'No OPD records found for today.'
+                                    : 'No appointments scheduled for this day.',
                                 style: AppTheme.body.copyWith(
                                   color: AppTheme.textSecondary,
                                 ),
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                _selectedDate != null
-                                    ? 'Tap the calendar icon to show all records'
-                                    : 'New registrations will appear here',
+                                _isToday
+                                    ? 'New registrations will appear here'
+                                    : 'Select a different date to view records',
                                 style: AppTheme.caption.copyWith(
                                   color: AppTheme.textHint,
                                 ),
                               ),
-                            if (_selectedDate == null || _isToday) ...[
+                            if (_isToday) ...[
                               const SizedBox(height: 24),
                               ElevatedButton.icon(
                                 icon: const Icon(Icons.add, size: 18),
@@ -495,7 +466,8 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
+      floatingActionButton: _isToday
+          ? FloatingActionButton.extended(
               backgroundColor: AppTheme.primary,
               elevation: 4,
               onPressed: () {
@@ -514,7 +486,8 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
               ),
-            ),
+            )
+          : null,
     );
   }
 }
