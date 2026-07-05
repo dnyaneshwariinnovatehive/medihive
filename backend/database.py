@@ -105,6 +105,7 @@ class DBConnection:
 
 
 def get_db():
+
     """Get a database connection from the pool.
     Retries once if the pool needs re-creation (e.g., after Neon auto-suspend)."""
     for attempt in range(2):
@@ -128,6 +129,7 @@ def get_db():
 
 
 def init_db():
+    logger.critical("MIGRATION_TEST: init_db executed with panchakarma migration")
     """Create all database tables if they don't exist.
     Uses get_db() which includes Neon auto-suspend retry logic."""
     db = get_db()
