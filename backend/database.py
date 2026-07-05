@@ -186,6 +186,7 @@ def init_db():
                 clinic_id           TEXT DEFAULT ''
             );
         """)
+        
         # Add columns for existing databases.
         # Each ALTER TABLE is followed by a rollback on failure because PostgreSQL
         # aborts the entire transaction when any statement fails, even if the
@@ -343,5 +344,11 @@ def init_db():
             );
         """)
         db.commit()
+
+    except Exception as e:
+        import traceback
+        logger.critical("INIT_DB ERROR: %s", str(e))
+        logger.critical(traceback.format_exc())
+        raise
     finally:
         db.close()
