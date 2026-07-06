@@ -55,6 +55,7 @@ class SyncManager extends ChangeNotifier {
   static final GlobalKey<ScaffoldMessengerState> scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
 
   SyncState _syncState = SyncState.synced;
+  bool _pendingSyncRequested = false;
   Timer? _debounceTimer;
   Timer? _pollTimer;
   StreamSubscription<bool>? _connectivitySubscription;
@@ -195,6 +196,14 @@ class SyncManager extends ChangeNotifier {
 
       _syncState = SyncState.synced;
       notifyListeners();
+
+      // If a forceSyncNow was requested while we were syncing, run again
+      if (_pendingSyncRequested) {
+        _pendingSyncRequested = false;
+        debugPrint('SYNC running deferred sync from pendingSyncRequested');
+        _trySync(); // fire-and-forget to avoid deep recursion
+      }
+
       debugPrint('========== SYNC COMPLETE ==========');
     } catch (e) {
       debugPrint('SyncManager._trySync failed: $e');
@@ -817,13 +826,21 @@ class SyncManager extends ChangeNotifier {
 
   Future<void> forceSyncNow() async {
     print('FORCE SYNC START');
+    if (_syncState == SyncState.syncing) {
+      debugPrint('FORCE SYNC: already syncing, scheduling deferred sync');
+      _pendingSyncRequested = true;
+      return;
+    }
     await _trySync();
     print('FORCE SYNC END');
   }
 
   Future<bool> triggerManualSync() async {
     if (kIsWeb) return false;
-    if (_syncState == SyncState.syncing) return false;
+    if (_syncState == SyncState.syncing) {
+      _pendingSyncRequested = true;
+      return false;
+    }
 
     _syncState = SyncState.syncing;
     notifyListeners();
