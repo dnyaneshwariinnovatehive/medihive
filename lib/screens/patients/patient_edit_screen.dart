@@ -89,14 +89,20 @@ class _PatientEditScreenState extends State<PatientEditScreen> {
     setState(() => _isSaving = true);
 
     try {
+      if (_patientRow == null) {
+        throw Exception('Patient data not loaded');
+      }
+      final sqliteId = _patientRow!['id'] as int;
+      final patientSyncId = _patientRow!['sync_id'] as String? ?? '';
+      print('PATIENT EDIT SAVE: patientSyncId=$patientSyncId sqliteId=$sqliteId');
+
       final repo = PatientRepository();
       final syncQueueRepo = SyncQueueRepository();
-      final sqliteId = _toSqliteId(widget.patientId);
 
       final name = _nameController.text.trim();
       final age = int.tryParse(_ageController.text.trim()) ?? (_patientRow?['age'] as int? ?? 0);
 
-      await repo.update(sqliteId, {
+      final updateData = <String, dynamic>{
         'full_name': name,
         'age': age,
         'mobile_number': Helpers.normalizePhone(_mobileController.text.trim()),
@@ -104,22 +110,25 @@ class _PatientEditScreenState extends State<PatientEditScreen> {
         'dob': _dobController.text.trim(),
         'gender': _gender,
         'blood_group': _bloodGroup,
-      });
+      };
+      print('PATIENT EDIT SAVE: updating with $updateData');
+      final affected = await repo.update(sqliteId, updateData);
+      print('PATIENT EDIT SAVE: affectedRows=$affected');
 
+      final syncEntityId = patientSyncId.isNotEmpty ? patientSyncId : widget.patientId;
       await syncQueueRepo.insert({
         'id': SyncIdGenerator.nextId(),
         'entity_type': 'patient',
-        'entity_id': widget.patientId,
+        'entity_id': syncEntityId,
         'status': 'pending',
         'retry_count': 0,
         'created_at': DateTime.now().toIso8601String(),
       });
+      print('PATIENT EDIT SAVE: sync queue entry created for $syncEntityId');
       Future.microtask(() {
         print('FORCING IMMEDIATE SYNC');
         SyncManager().forceSyncNow();
       });
-
-
 
       if (mounted) {
         context.read<PatientProvider>().loadPatients();

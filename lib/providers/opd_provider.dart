@@ -636,7 +636,7 @@ class OpdProvider extends ChangeNotifier {
               'payment_mode=${recordMap['payment_mode']} '
               'followup_status=${recordMap['followup_status']} '
               'next_visit_date=${recordMap['next_visit_date']} '
-              'medicines=${recordMap['medicines']?.toString().substring(0, 100)}');
+              'medicines=${recordMap['medicines']}');
         } else {
           print('OPD EDIT WARNING: existing record NOT FOUND for id=$existingRecordId');
         }
