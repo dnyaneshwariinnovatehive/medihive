@@ -147,14 +147,25 @@ void main() async {
     }
 
     // One-time Hive → SQLite migration
-    final migrationPrefs = await SharedPreferences.getInstance();
-    if (!kIsWeb && migrationPrefs.getBool('hive_sqlite_migration_done') != true) {
+    final startupPrefs = await SharedPreferences.getInstance();
+    if (!kIsWeb && startupPrefs.getBool('hive_sqlite_migration_done') != true) {
       try {
         final result = await DataMigrationService().migrate();
         debugPrint('Migration complete: ${result.totalSqlite} rows migrated');
       } catch (e) {
         debugPrint('Migration error: $e');
       }
+    }
+
+    // First-run detection: clear stale sync timestamps that may have
+    // survived from Android auto-backup restore.
+    if (!kIsWeb && startupPrefs.getBool('app_first_run_complete') != true) {
+      debugPrint('MAIN: first run detected — clearing stale sync timestamps');
+      await startupPrefs.remove('last_cloud_sync');
+      await startupPrefs.remove('last_flask_sync');
+      await startupPrefs.remove('hive_sqlite_migration_done');
+      await startupPrefs.setBool('app_first_run_complete', true);
+      debugPrint('MAIN: first run cleanup complete');
     }
 
     // Initialize local notification services
