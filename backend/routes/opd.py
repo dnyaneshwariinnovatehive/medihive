@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from config import IMAGE_STORAGE_PATH, GOOGLE_SHEET_ID, IS_CLOUD
 from desktop_google.drive_service import upload_images_to_drive, upload_image_fileobj_to_drive
-from desktop_google.sheets_service import upsert_opd_row_in_sheet
+from desktop_google.sheets_service import upsert_opd_row_in_sheet, _get_client, _get_opd_worksheet
 from services.log_service import get_logger
 
 logger = get_logger(__name__)
@@ -147,6 +147,53 @@ def build_sheet_row_data(opd, patient, drive_urls):
             ('Scheduled' if opd.get('next_visit', '') else 'No Follow-up'),
         'Image Links': drive_urls,
     }
+
+
+@opd_bp.route('/<opd_id>/debug-sheet', methods=['GET'])
+@jwt_required()
+def debug_opd_sheet(opd_id):
+    """
+    Debug endpoint: returns the PostgreSQL state of an OPD + patient,
+    what the sheet row WOULD look like, and the current Google Sheet state.
+    Call this after editing an OPD to see if the push data is correct.
+    """
+    opd = OPDRecord.get(opd_id)
+    if opd is None:
+        return jsonify({'error': 'OPD not found in PostgreSQL'}), 404
+
+    patient = Patient.get(opd['patient_id'])
+
+    # Build the sheet row as it would be written
+    sheet_row_data = build_sheet_row_data(opd, patient or {}, [])
+
+    # Check the current Google Sheet state for this OPD ID
+    sheet_state = None
+    try:
+        client = _get_client()
+        ws = _get_opd_worksheet(client)
+        col_a = ws.col_values(1)
+        row_found = None
+        for i, existing_id in enumerate(col_a):
+            if i == 0:
+                continue
+            if existing_id == opd_id:
+                row_found = i + 1
+                break
+        sheet_state = {
+            'row_found': row_found,
+            'column_a_count': len(col_a),
+            'column_a_header': col_a[0] if col_a else '',
+        }
+    except Exception as e:
+        sheet_state = {'error': str(e)}
+
+    return jsonify({
+        'opd_id': opd_id,
+        'postgresql_opd': {k: str(v) if not isinstance(v, (str, int, float, bool, type(None))) else v for k, v in opd.items()},
+        'postgresql_patient': {k: str(v) if not isinstance(v, (str, int, float, bool, type(None))) else v for k, v in (patient or {}).items()},
+        'sheet_row_data': sheet_row_data,
+        'sheet_state': sheet_state,
+    }), 200
 
 
 @opd_bp.route('/<opd_id>/images', methods=['POST'])
