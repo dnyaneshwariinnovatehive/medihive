@@ -394,17 +394,7 @@ class OpdProvider extends ChangeNotifier {
   }
 
   void clearDraft() {
-    try {
-      final box = Hive.isBoxOpen('drafts') ? Hive.box('drafts') : null;
-      if (box != null) {
-        box.delete('current_opd_draft');
-      }
-    } catch (e) {
-      debugPrint('Error clearing draft from Hive: $e');
-    }
     reset();
-    hasDraft = false;
-    notifyListeners();
   }
 
   bool get hasUnsavedData {
@@ -586,6 +576,13 @@ class OpdProvider extends ChangeNotifier {
   }
 
   void reset() {
+    try {
+      final box = Hive.isBoxOpen('drafts') ? Hive.box('drafts') : null;
+      if (box != null) {
+        box.delete('current_opd_draft');
+      }
+    } catch (_) {}
+
     final draftKey = _formData.patientId.isNotEmpty
         ? 'opd_draft_${_formData.patientId}'
         : 'opd_draft_new_patient';
@@ -593,6 +590,7 @@ class OpdProvider extends ChangeNotifier {
 
     _currentStep = 0;
     _formData.reset();
+    hasDraft = false;
     notifyListeners();
   }
 
