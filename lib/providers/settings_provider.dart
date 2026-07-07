@@ -5,7 +5,6 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:flutter/foundation.dart';
 import '../theme/app_theme.dart';
 import '../services/google_auth_service.dart';
-import '../services/google_drive_sync_service.dart';
 import '../services/sync_manager.dart';
 import '../repositories/clinic_settings_repository.dart';
 

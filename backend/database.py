@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 _pool = None
 _pool_lock = False
+_db_initialized = False
 
 DEFAULT_ADMIN_USERNAME = 'admin_medihive'
 DEFAULT_ADMIN_PASSWORD = '1234567890'
@@ -105,9 +106,10 @@ class DBConnection:
 
 
 def get_db():
-
     """Get a database connection from the pool.
+    Lazily initializes the database schema on first call.
     Retries once if the pool needs re-creation (e.g., after Neon auto-suspend)."""
+    _init_db()
     for attempt in range(2):
         try:
             pool_obj = get_pool()
@@ -128,12 +130,19 @@ def get_db():
             raise
 
 
-def init_db():
+def _init_db():
+    """Lazy initialization: called on first get_db() call.
+    Creates all database tables if they don't exist and seeds the default admin user.
+    Idempotent — safe to call multiple times.
+    Only marks initialization complete AFTER successful commit."""
+    global _db_initialized
+    if _db_initialized:
+        return
+
     logger.critical("MIGRATION_TEST: init_db executed with panchakarma migration")
-    """Create all database tables if they don't exist.
-    Uses get_db() which includes Neon auto-suspend retry logic."""
-    db = get_db()
-    # Clear any stale aborted transaction from a previous connection use
+    pool_obj = get_pool()
+    conn = pool_obj.getconn()
+    db = DBConnection(conn)
     db.rollback()
     try:
         db.execute("""
@@ -188,9 +197,6 @@ def init_db():
         """)
         
         # Add columns for existing databases.
-        # Each ALTER TABLE is followed by a rollback on failure because PostgreSQL
-        # aborts the entire transaction when any statement fails, even if the
-        # error is caught in Python.
         try:
             db.execute("ALTER TABLE opd_records ADD COLUMN panchakarma_notes TEXT DEFAULT ''")
         except Exception:
@@ -344,7 +350,7 @@ def init_db():
             );
         """)
         db.commit()
-
+        _db_initialized = True
     except Exception as e:
         import traceback
         logger.critical("INIT_DB ERROR: %s", str(e))
@@ -352,3 +358,9 @@ def init_db():
         raise
     finally:
         db.close()
+
+
+def init_db():
+    """Public wrapper for explicit initialization (used by tests and scripts).
+    Idempotent — safe to call multiple times."""
+    _init_db()

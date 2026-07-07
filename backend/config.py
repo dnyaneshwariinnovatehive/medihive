@@ -15,7 +15,6 @@ DATABASE_URL = os.environ.get(
     'DATABASE_URL',
     'postgresql://medihive:medihive@localhost:5432/medihive'
 )
-print("DATABASE_URL FROM ENV =", DATABASE_URL)
 DB_POOL_MIN = int(os.environ.get('DB_POOL_MIN', '0'))
 DB_POOL_MAX = int(os.environ.get('DB_POOL_MAX', '5'))
 # Neon auto-suspend: idle compute suspends after 5 min.

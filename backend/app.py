@@ -3,7 +3,6 @@ from flask import Flask
 from flask_jwt_extended import JWTManager
 from flask_cors import CORS
 from config import SECRET_KEY, JWT_SECRET_KEY, JWT_ACCESS_TOKEN_EXPIRES
-from database import init_db
 from services.log_service import get_logger
 
 from routes.auth import auth_bp
@@ -174,42 +173,7 @@ def initialize_google_services():
         logger.critical("Google setup validation error: %s", e)
 
 
-try:
-    init_db()
-    logger.info("Database initialized successfully")
-except Exception as e:
-    logger.critical("Database initialization failed: %s", e)
-    # On Cloud Run, Cloud SQL must be reachable. On local dev,
-    # ensure PostgreSQL is running or DATABASE_URL is configured.
-
-# initialize_google_services()
-logger.info("Google validation skipped for Railway deployment")
-try:
-    from config import (
-        DRIVE_ROOT_FOLDER_ID,
-        DRIVE_TOKEN_JSON,
-        GOOGLE_CREDENTIALS_JSON,
-        GOOGLE_SHEET_ID,
-        IS_CLOUD,
-    )
-
-    logger.info(
-        "Google config: IS_CLOUD=%s GOOGLE_SHEET_ID_SET=%s "
-        "GOOGLE_CREDENTIALS_JSON_SET=%s DRIVE_ROOT_FOLDER_ID_SET=%s "
-        "DRIVE_TOKEN_JSON_SET=%s",
-        IS_CLOUD,
-        bool(GOOGLE_SHEET_ID),
-        bool(GOOGLE_CREDENTIALS_JSON),
-        bool(DRIVE_ROOT_FOLDER_ID),
-        bool(DRIVE_TOKEN_JSON),
-    )
-except Exception as e:
-    logger.warning("Google config logging failed: %s", e)
 app = create_app()
-
-
-
-import os
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))

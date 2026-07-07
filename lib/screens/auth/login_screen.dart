@@ -479,18 +479,6 @@ class _LoginScreenState extends State<LoginScreen>
                 label: const Text('SIGN IN WITH GOOGLE'),
               ),
             )),
-            const SizedBox(height: 16),
-            TextButton(
-              onPressed: () => context.push('/register'),
-              child: Text(
-                "Don't have an account? Create one",
-                style: TextStyle(
-                  color: AppTheme.primary,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
-                ),
-              ),
-            ),
           ],
         ),
       ),

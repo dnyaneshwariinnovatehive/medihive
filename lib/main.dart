@@ -32,7 +32,6 @@ import 'screens/splash_screen.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/two_factor_verify_screen.dart';
 import 'screens/auth/forgot_password_screen.dart';
-import 'screens/auth/registration_screen.dart';
 import 'screens/app_shell.dart';
 import 'screens/dashboard/dashboard_screen.dart';
 import 'package:medihive/screens/opd/opd_registration_screen.dart';
@@ -291,12 +290,6 @@ final _router = GoRouter(
     GoRoute(
       path: '/forgot-password',
       builder: (context, state) => const ForgotPasswordScreen(),
-    ),
-
-    // Registration → /register
-    GoRoute(
-      path: '/register',
-      builder: (context, state) => const RegistrationScreen(),
     ),
 
     // 2FA Verification → /2fa-verify
