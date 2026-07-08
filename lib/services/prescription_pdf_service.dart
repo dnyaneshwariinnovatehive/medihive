@@ -59,7 +59,7 @@ class PrescriptionPdfService {
   }
 
   static pw.Widget _buildHeader(Prescription rx) {
-    pw.Widget? logoWidget;
+    pw.Widget logoWidget;
     if (rx.clinicLogoPath.isNotEmpty) {
       try {
         final file = File(rx.clinicLogoPath);
@@ -69,17 +69,21 @@ class PrescriptionPdfService {
             height: 56,
             child: pw.Image(pw.MemoryImage(file.readAsBytesSync())),
           );
+        } else {
+          logoWidget = _defaultLogo();
         }
-      } catch (_) {}
+      } catch (_) {
+        logoWidget = _defaultLogo();
+      }
+    } else {
+      logoWidget = _defaultLogo();
     }
 
     return pw.Row(
       crossAxisAlignment: pw.CrossAxisAlignment.center,
       children: [
-        if (logoWidget != null) ...[
-          logoWidget,
-          pw.SizedBox(width: 16),
-        ],
+        logoWidget,
+        pw.SizedBox(width: 16),
         pw.Expanded(
           child: pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.end,
@@ -104,6 +108,34 @@ class PrescriptionPdfService {
           ),
         ),
       ],
+    );
+  }
+
+  static pw.Widget _defaultLogo() {
+    return pw.Container(
+      width: 54,
+      height: 54,
+      decoration: pw.BoxDecoration(
+        color: PdfColors.blueGrey800,
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(10)),
+      ),
+      child: pw.Center(
+        child: pw.Stack(
+          alignment: pw.Alignment.center,
+          children: [
+            pw.Container(
+              width: 24,
+              height: 6,
+              color: PdfColors.white,
+            ),
+            pw.Container(
+              width: 6,
+              height: 24,
+              color: PdfColors.white,
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -239,11 +271,6 @@ class PrescriptionPdfService {
   }
 
   static pw.Widget _buildMedicinesTable(Prescription rx) {
-    final headerStyle = pw.TextStyle(
-      fontSize: 11,
-      fontWeight: pw.FontWeight.bold,
-      color: PdfColors.white,
-    );
     final cellStyle = pw.TextStyle(
       fontSize: 11,
       color: PdfColors.grey800,
@@ -251,6 +278,11 @@ class PrescriptionPdfService {
     final numStyle = pw.TextStyle(
       fontSize: 11,
       color: PdfColors.grey600,
+    );
+    final headerLabelStyle = pw.TextStyle(
+      fontSize: 11,
+      fontWeight: pw.FontWeight.bold,
+      color: PdfColors.grey800,
     );
 
     return pw.Container(
@@ -281,19 +313,19 @@ class PrescriptionPdfService {
               border: pw.Border(
                 bottom: pw.BorderSide(color: PdfColors.grey300),
               ),
-              color: PdfColors.blueGrey50,
+              color: PdfColors.grey100,
             ),
             child: pw.Row(
               children: [
                 pw.SizedBox(width: 24),
-                pw.Expanded(flex: 1, child: pw.Text('#', style: headerStyle)),
+                pw.Expanded(flex: 1, child: pw.Text('#', style: headerLabelStyle)),
                 pw.Expanded(
                   flex: 5,
-                  child: pw.Text('Medicine', style: headerStyle),
+                  child: pw.Text('Medicine', style: headerLabelStyle),
                 ),
                 pw.Expanded(
                   flex: 4,
-                  child: pw.Text('Dosage', style: headerStyle),
+                  child: pw.Text('Dosage', style: headerLabelStyle),
                 ),
               ],
             ),
