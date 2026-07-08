@@ -585,7 +585,7 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
                                     final pdfData =
                                         await PrescriptionPdfService.generatePdf(
                                           rx,
-                                          includePatientDetails: false,
+                                          includePatientDetails: true,
                                         );
                                     final normalizedPhone =
                                         Helpers.normalizePhone(patient.mobile);
