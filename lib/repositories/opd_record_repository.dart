@@ -123,4 +123,37 @@ class OpdRecordRepository {
     final result = await db.rawQuery('SELECT COALESCE(MAX(id), 0) AS max_id FROM $tableOpdVisits');
     return Sqflite.firstIntValue(result) ?? 0;
   }
+
+  Future<int> countTodayFollowUps() async {
+    final db = await _db;
+    final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final result = await db.rawQuery(
+      'SELECT COUNT(*) AS cnt FROM $tableOpdVisits WHERE next_visit_date = ?',
+      [today],
+    );
+    return Sqflite.firstIntValue(result) ?? 0;
+  }
+
+  Future<int> countTodayPanchakarmaSessions() async {
+    final db = await _db;
+    final todayStart = DateFormat("yyyy-MM-dd'T'00:00:00").format(DateTime.now());
+    final todayEnd = DateFormat("yyyy-MM-dd'T'23:59:59").format(DateTime.now());
+    final result = await db.rawQuery(
+      '''SELECT COUNT(*) AS cnt FROM $tableOpdVisits
+         WHERE visit_datetime >= ? AND visit_datetime <= ?
+         AND (panchakarma_notes IS NOT NULL AND panchakarma_notes != '')''',
+      [todayStart, todayEnd],
+    );
+    return Sqflite.firstIntValue(result) ?? 0;
+  }
+
+  Future<int> countPendingPayments() async {
+    final db = await _db;
+    final result = await db.rawQuery(
+      '''SELECT COUNT(*) AS cnt FROM $tableOpdVisits
+         WHERE total_fee IS NOT NULL AND total_fee > 0
+         AND (payment_mode IS NULL OR payment_mode = '')''',
+    );
+    return Sqflite.firstIntValue(result) ?? 0;
+  }
 }

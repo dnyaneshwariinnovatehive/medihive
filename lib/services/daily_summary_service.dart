@@ -88,58 +88,47 @@ class DailySummaryService {
   static Future<void> sendMorningSummary() async {
     if (kIsWeb) return;
 
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
+    final repo = OpdRecordRepository();
 
-    // Today's OPD visits count
-    int opdCount = 0;
+    int followUpCount = 0;
+    int panchakarmaCount = 0;
+    int pendingPaymentCount = 0;
     try {
-      final opdRepo = OpdRecordRepository();
-      final todayRecords = await opdRepo.getByDate(today);
-      opdCount = todayRecords.length;
+      followUpCount = await repo.countTodayFollowUps();
+    } catch (_) {}
+    try {
+      panchakarmaCount = await repo.countTodayPanchakarmaSessions();
+    } catch (_) {}
+    try {
+      pendingPaymentCount = await repo.countPendingPayments();
     } catch (_) {}
 
-    // Today's appointments count
-    int appointmentCount = 0;
-    try {
-      final box = Hive.box<AppointmentModel>('appointments');
-      appointmentCount = box.values.where((a) {
-        final aptDate = DateTime(
-          a.dateTime.year, a.dateTime.month, a.dateTime.day,
-        );
-        return aptDate == today;
-      }).length;
-    } catch (_) {}
+    const title = 'Good Morning, Doctor! \u{1F305}';
 
-    // Follow-ups due today
-    final followUpCount = _todayFollowUpCount();
-
-    // Clinical notes for today
-    final notes = await _todayNotes();
-
-    final parts = <String>[];
-    if (opdCount > 0) {
-      parts.add('$opdCount OPD visit${opdCount == 1 ? '' : 's'} today');
+    if (followUpCount > 0 || panchakarmaCount > 0 || pendingPaymentCount > 0) {
+      final parts = <String>[];
+      if (followUpCount > 0) {
+        parts.add('$followUpCount follow-up${followUpCount == 1 ? '' : 's'}');
+      }
+      if (panchakarmaCount > 0) {
+        parts.add('$panchakarmaCount Panchakarma session${panchakarmaCount == 1 ? '' : 's'}');
+      }
+      if (pendingPaymentCount > 0) {
+        parts.add('$pendingPaymentCount pending payment${pendingPaymentCount == 1 ? '' : 's'}');
+      }
+      final body = 'You have ${parts.join(', ')} today. Tap to view today\'s schedule.';
+      await local_notif.LocalNotificationService().showNotification(
+        id: _morningSummaryId,
+        title: title,
+        body: body,
+      );
+    } else {
+      await local_notif.LocalNotificationService().showNotification(
+        id: _morningSummaryId,
+        title: title,
+        body: 'No follow-ups are scheduled for today. Have a productive day!',
+      );
     }
-    if (appointmentCount > 0) {
-      parts.add('$appointmentCount appointment${appointmentCount == 1 ? '' : 's'}');
-    }
-    if (followUpCount > 0) {
-      parts.add('$followUpCount follow-up${followUpCount == 1 ? '' : 's'} due');
-    }
-    if (notes.isNotEmpty) {
-      parts.add('${notes.length} clinical note${notes.length == 1 ? '' : 's'}');
-    }
-
-    final body = parts.isNotEmpty
-        ? parts.join(' • ')
-        : 'No visits, appointments, or follow-ups scheduled today';
-
-    await local_notif.LocalNotificationService().showNotification(
-      id: _morningSummaryId,
-      title: 'Good Morning, Doctor',
-      body: body,
-    );
   }
 
   static Future<void> sendEveningSummary() async {
