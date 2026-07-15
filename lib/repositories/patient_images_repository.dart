@@ -68,6 +68,7 @@ class PatientImagesRepository {
       'id': row['id'],
       'patient_id': row['patient_id'],
       'opd_visit_id': row['opd_visit_id'],
+      'clinic_id': row['clinic_id'],
       'file_path': row['file_path'],
       'image_type': row['image_type'],
       'sync_status': row['sync_status'],

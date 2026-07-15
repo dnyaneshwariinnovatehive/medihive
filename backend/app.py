@@ -69,18 +69,18 @@ def create_app():
         db = get_db()
         try:
             patients = db.execute("SELECT COUNT(*) AS count FROM patients").fetchone()
-            opd_records = db.execute("SELECT COUNT(*) AS count FROM opd_records").fetchone()
+            opd_visits = db.execute("SELECT COUNT(*) AS count FROM opd_visits").fetchone()
             recent_opd = db.execute(
                 """
-                SELECT id, patient_id, visit_date, image_links, updated_at
-                FROM opd_records
+                SELECT id, patient_id, visit_datetime, image_links, updated_at
+                FROM opd_visits
                 ORDER BY updated_at DESC
                 LIMIT 10
                 """
             ).fetchall()
             return {
                 'patients_count': patients['count'] if patients else 0,
-                'opd_records_count': opd_records['count'] if opd_records else 0,
+                'opd_visits_count': opd_visits['count'] if opd_visits else 0,
                 'recent_opd_records': [dict(row) for row in recent_opd],
             }
         finally:

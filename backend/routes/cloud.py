@@ -180,7 +180,7 @@ def download_changes():
     )
     for p in patients[:3]:
         logger.info("CLOUD DEVICE DEBUG: patient id=%s name=%s updated_at=%s",
-                      p['id'], p.get('name', ''), p.get('updated_at', ''))
+                      p['id'], p.get('full_name', ''), p.get('updated_at', ''))
     for r in opd_records[:3]:
         logger.info("CLOUD DEVICE DEBUG: opd id=%s patient_id=%s updated_at=%s",
                       r['id'], r.get('patient_id', ''), r.get('updated_at', ''))
@@ -243,7 +243,7 @@ def cloud_upload_images(opd_id):
     logger.info("CLOUD IMAGE: found %d images for OPD %s", len(files), opd_id)
 
     try:
-        visit_date = datetime.fromisoformat(opd['visit_date'])
+        visit_date = datetime.fromisoformat(opd['visit_datetime'])
     except (ValueError, TypeError):
         visit_date = datetime.utcnow()
 

@@ -22,7 +22,7 @@ def login():
     db = get_db()
     hashed = hashlib.sha256(password.encode()).hexdigest()
     user = db.execute(
-        "SELECT * FROM users WHERE username = %s AND password = %s",
+        "SELECT * FROM users WHERE username = %s AND password_hash = %s",
         (username, hashed)
     ).fetchone()
     db.close()
@@ -62,9 +62,12 @@ def register():
 
     hashed = hashlib.sha256(password.encode()).hexdigest()
     now = datetime.utcnow().isoformat()
+    email = data.get('email', f"{username}@medihive.local")
+    clinic_id = data.get('clinic_id', 'CLI001')
+    role = data.get('role', 'Doctor')
     row = db.execute(
-        "INSERT INTO users (username, password, name, created_at) VALUES (%s, %s, %s, %s) RETURNING id",
-        (username, hashed, name, now)
+        "INSERT INTO users (username, password_hash, email, role, name, created_at, clinic_id) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+        (username, hashed, email, role, name, now, clinic_id)
     ).fetchone()
     db.commit()
     user_id = row['id']

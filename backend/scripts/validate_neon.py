@@ -129,7 +129,7 @@ def check_schema():
 
     # Verify tables exist
     required_tables = [
-        'patients', 'opd_records', 'appointments', 'users',
+        'patients', 'opd_visits', 'appointments', 'users',
         'fcm_tokens', 'deleted_entities', 'last_sync', 'settings',
         'clinics', 'device_registry', 'cloud_sync_log',
     ]

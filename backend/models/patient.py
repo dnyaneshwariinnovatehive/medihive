@@ -30,15 +30,16 @@ class Patient:
         now = datetime.utcnow().isoformat()
         db = get_db()
         db.execute("""
-            INSERT INTO patients (id, name, dob, age, gender, blood_group, mobile, address,
+            INSERT INTO patients (id, full_name, dob, age, gender, blood_group, mobile_number, alternate_mobile, address,
                                   last_diagnosis, last_visit_date, created_at, updated_at,
                                   is_synced, user_id, clinic_id)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s)
         """, (
-            data['id'], data['name'], data.get('dob', ''),
+            data['id'], data['full_name'], data.get('dob', ''),
             data.get('age', 0), data.get('gender', 'Not Specified'),
             data.get('blood_group', 'Not Specified'),
-            data.get('mobile', ''), data.get('address', ''),
+            data.get('mobile_number', ''), data.get('alternate_mobile', ''),
+            data.get('address', ''),
             data.get('last_diagnosis', ''), data.get('last_visit_date', ''),
             now, now,
             data.get('user_id', ''),
@@ -51,9 +52,9 @@ class Patient:
     @staticmethod
     def update(patient_id, data):
         now = datetime.utcnow().isoformat()
-        allowed = ('name', 'dob', 'age', 'gender', 'blood_group', 'mobile',
-                   'address', 'last_diagnosis', 'last_visit_date', 'user_id',
-                   'clinic_id')
+        allowed = ('full_name', 'dob', 'age', 'gender', 'blood_group', 'mobile_number',
+                   'alternate_mobile', 'address', 'last_diagnosis', 'last_visit_date',
+                   'user_id', 'clinic_id')
         fields = []
         values = []
         for k in allowed:
@@ -91,7 +92,7 @@ class Patient:
         from models.opd_record import OPDRecord
         db = get_db()
         opd_rows = db.execute(
-            "SELECT id FROM opd_records WHERE patient_id = %s", (patient_id,)
+            "SELECT id FROM opd_visits WHERE patient_id = %s", (patient_id,)
         ).fetchall()
         db.close()
         for row in opd_rows:

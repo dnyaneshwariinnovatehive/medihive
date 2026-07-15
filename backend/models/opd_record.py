@@ -3,7 +3,7 @@ from datetime import datetime
 
 
 class OPDRecord:
-    TABLE = 'opd_records'
+    TABLE = 'opd_visits'
 
     @staticmethod
     def dict_from_row(row):
@@ -16,18 +16,18 @@ class OPDRecord:
         db = get_db()
         if patient_id:
             rows = db.execute(
-                "SELECT * FROM opd_records WHERE patient_id = %s ORDER BY visit_date DESC",
+                "SELECT * FROM opd_visits WHERE patient_id = %s ORDER BY visit_datetime DESC",
                 (patient_id,)
             ).fetchall()
         else:
-            rows = db.execute("SELECT * FROM opd_records ORDER BY visit_date DESC").fetchall()
+            rows = db.execute("SELECT * FROM opd_visits ORDER BY visit_datetime DESC").fetchall()
         db.close()
         return [OPDRecord.dict_from_row(r) for r in rows]
 
     @staticmethod
     def get(record_id):
         db = get_db()
-        row = db.execute("SELECT * FROM opd_records WHERE id = %s", (record_id,)).fetchone()
+        row = db.execute("SELECT * FROM opd_visits WHERE id = %s", (record_id,)).fetchone()
         db.close()
         return OPDRecord.dict_from_row(row)
 
@@ -36,24 +36,24 @@ class OPDRecord:
         now = datetime.utcnow().isoformat()
         db = get_db()
         db.execute("""
-            INSERT INTO opd_records (id, patient_id, type, symptoms, diagnosis, medicines,
-                visit_date, clinical_notes, consultation_fee, medicine_fee, panchakarma_fee,
-                total_fee, discount, discount_type, payment_mode, charge_type,
-                previous_visit_date, follow_up_reason,
-                next_visit, blood_group, image_links, panchakarma_notes, created_at, updated_at,
+            INSERT INTO opd_visits (id, patient_id, opd_type, symptoms, diagnosis, medicines,
+                visit_datetime, clinical_notes, consultation_fee, medicine_fee, panchakarma_fee,
+                total_fee, discount_value, discount_type, payment_mode, charge_type,
+                previous_visit_date, followup_status,
+                next_visit_date, blood_group, image_links, panchakarma_notes, created_at, updated_at,
                 is_synced, user_id, clinic_id)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s)
         """, (
-            data['id'], data['patient_id'], data.get('type', 'consultation'),
+            data['id'], data['patient_id'], data.get('opd_type', 'consultation'),
             data.get('symptoms', ''), data.get('diagnosis', ''),
-            data.get('medicines', ''), data.get('visit_date', now),
+            data.get('medicines', ''), data.get('visit_datetime', now),
             data.get('clinical_notes', ''), data.get('consultation_fee', '0'),
             data.get('medicine_fee', '0'), data.get('panchakarma_fee', '0'),
-            data.get('total_fee', '0'), data.get('discount', '0'),
+            data.get('total_fee', '0'), data.get('discount_value', '0'),
             data.get('discount_type', 'None'),
             data.get('payment_mode', ''), data.get('charge_type', ''),
-            data.get('previous_visit_date', ''), data.get('follow_up_reason', ''),
-            data.get('next_visit', ''), data.get('blood_group', ''),
+            data.get('previous_visit_date', ''), data.get('followup_status', ''),
+            data.get('next_visit_date', ''), data.get('blood_group', ''),
             data.get('image_links', ''),
             data.get('panchakarma_notes', ''),
             now, now,
@@ -67,11 +67,11 @@ class OPDRecord:
     @staticmethod
     def update(record_id, data):
         now = datetime.utcnow().isoformat()
-        allowed = ('type', 'symptoms', 'diagnosis', 'medicines', 'visit_date',
+        allowed = ('opd_type', 'symptoms', 'diagnosis', 'medicines', 'visit_datetime',
                    'clinical_notes', 'consultation_fee', 'medicine_fee',
-                   'panchakarma_fee', 'total_fee', 'discount', 'discount_type',
+                   'panchakarma_fee', 'total_fee', 'discount_value', 'discount_type',
                    'payment_mode', 'charge_type', 'previous_visit_date',
-                   'follow_up_reason', 'next_visit', 'blood_group',
+                   'followup_status', 'next_visit_date', 'blood_group',
                    'image_links', 'user_id', 'clinic_id',
                    'panchakarma_notes')
         fields = []
@@ -86,7 +86,7 @@ class OPDRecord:
         values.append(now)
         values.append(record_id)
         db = get_db()
-        db.execute(f"UPDATE opd_records SET {', '.join(fields)} WHERE id = %s", values)
+        db.execute(f"UPDATE opd_visits SET {', '.join(fields)} WHERE id = %s", values)
         db.commit()
         db.close()
         return OPDRecord.get(record_id)
@@ -96,7 +96,7 @@ class OPDRecord:
         from models.deleted_entity import DeletedEntity
         DeletedEntity.record('opd_visit', record_id)
         db = get_db()
-        db.execute("DELETE FROM opd_records WHERE id = %s", (record_id,))
+        db.execute("DELETE FROM opd_visits WHERE id = %s", (record_id,))
         db.commit()
         db.close()
 
@@ -112,7 +112,7 @@ class OPDRecord:
         now = datetime.utcnow().isoformat()
         db = get_db()
         db.execute(
-            "UPDATE opd_records SET image_links = %s, updated_at = %s WHERE id = %s",
+            "UPDATE opd_visits SET image_links = %s, updated_at = %s WHERE id = %s",
             (links_text, now, record_id)
         )
         db.commit()
@@ -122,7 +122,7 @@ class OPDRecord:
     def by_clinic(clinic_id):
         db = get_db()
         rows = db.execute(
-            "SELECT * FROM opd_records WHERE clinic_id = %s ORDER BY updated_at DESC",
+            "SELECT * FROM opd_visits WHERE clinic_id = %s ORDER BY updated_at DESC",
             (clinic_id,)
         ).fetchall()
         db.close()
@@ -133,17 +133,17 @@ class OPDRecord:
         db = get_db()
         if clinic_id:
             rows = db.execute(
-                "SELECT * FROM opd_records WHERE updated_at > %s AND clinic_id = %s ORDER BY updated_at",
+                "SELECT * FROM opd_visits WHERE updated_at > %s AND clinic_id = %s ORDER BY updated_at",
                 (timestamp, clinic_id)
             ).fetchall()
         elif user_id:
             rows = db.execute(
-                "SELECT * FROM opd_records WHERE updated_at > %s AND (user_id = %s OR user_id = '') ORDER BY updated_at",
+                "SELECT * FROM opd_visits WHERE updated_at > %s AND (user_id = %s OR user_id = '') ORDER BY updated_at",
                 (timestamp, user_id)
             ).fetchall()
         else:
             rows = db.execute(
-                "SELECT * FROM opd_records WHERE updated_at > %s ORDER BY updated_at",
+                "SELECT * FROM opd_visits WHERE updated_at > %s ORDER BY updated_at",
                 (timestamp,)
             ).fetchall()
         db.close()

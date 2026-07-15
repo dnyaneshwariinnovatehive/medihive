@@ -242,6 +242,7 @@ class DataMigrationService {
 
         await db.insert(tableOpdVisits, {
           'id': numericId,
+          'clinic_id': 1,
           'opd_id': record.id,
           'patient_id': mappedPatientId,
           'visit_datetime': record.visitDate.toIso8601String(),
@@ -316,6 +317,7 @@ class DataMigrationService {
 
         await db.insert(tableCalendarNotes, {
           'id': nextId++,
+          'clinic_id': 1,
           'note_date': normalizedDate,
           'note_text': noteText,
           'created_at': now,

@@ -12,9 +12,9 @@ def list_patients():
     patients = Patient.all()
     if search:
         patients = [p for p in patients if
-                    search in p['name'].lower() or
+                    search in p.get('full_name', '').lower() or
                     search in p['id'].lower() or
-                    search in p.get('mobile', '').lower()]
+                    search in p.get('mobile_number', '').lower()]
     return jsonify({'patients': patients}), 200
 
 
@@ -31,8 +31,8 @@ def get_patient(patient_id):
 @jwt_required()
 def create_patient():
     data = request.get_json()
-    if not data or not data.get('id') or not data.get('name'):
-        return jsonify({'error': 'id and name required'}), 400
+    if not data or not data.get('id') or not data.get('full_name'):
+        return jsonify({'error': 'id and full_name required'}), 400
     patient = Patient.create(data)
     return jsonify({'patient': patient}), 201
 

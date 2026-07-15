@@ -25,10 +25,10 @@ def create_default_doctor():
 
         conn.exec_driver_sql(
             """
-            INSERT INTO users (username, password_hash, email)
-            VALUES (?, ?, ?)
+            INSERT INTO users (username, password_hash, email, clinic_id)
+            VALUES (?, ?, ?, ?)
             """,
-            ("admin", password_hash, "doctor@clinic.local")
+            ("admin", password_hash, "doctor@clinic.local", "CLI001")
         )
 
         print("Default doctor created (username: admin)")

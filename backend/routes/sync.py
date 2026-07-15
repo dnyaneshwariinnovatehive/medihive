@@ -45,7 +45,7 @@ def _sync_opd_to_sheets(opd, image_links=None):
         db = get_db()
         db.execute("""
             INSERT INTO patients
-                (id, name, mobile, gender, created_at, updated_at, is_synced)
+                (id, full_name, mobile_number, gender, created_at, updated_at, is_synced)
             VALUES (%s, %s, %s, %s, %s, %s, 0)
             ON CONFLICT DO NOTHING
         """, (
@@ -62,8 +62,8 @@ def _sync_opd_to_sheets(opd, image_links=None):
             )
             patient = {
                 'id': patient_id,
-                'name': 'Unknown',
-                'mobile': '',
+                'full_name': 'Unknown',
+                'mobile_number': '',
                 'gender': 'Not Specified',
                 'dob': '',
                 'age': 0,
@@ -160,8 +160,8 @@ def push():
     )
     if data.get('opd_records'):
         for r in data['opd_records']:
-            logger.info("PUSH OPD: id=%s patient_id=%s visit_date=%s",
-                        r.get('id'), r.get('patient_id'), r.get('visit_date'))
+            logger.info("PUSH OPD: id=%s patient_id=%s visit_datetime=%s",
+                        r.get('id'), r.get('patient_id'), r.get('visit_datetime'))
 
     results = {'patients': [], 'opd_records': [], 'appointments': []}
     temp_id_map = {}
@@ -227,13 +227,13 @@ def push():
         panchakarma_fee = r.get('panchakarma_fee', '')
         total_fee = r.get('total_fee', '')
         discount_type = r.get('discount_type', '')
-        discount = r.get('discount', '')
+        discount = r.get('discount_value', '')
         logger.info(
             "OPD UPSERT+SYNC: id=%s patient_id=%s "
             "diagnosis=%r symptoms=%r clinical_notes=%r panchakarma_notes=%r "
             "consultation_fee=%s medicine_fee=%s panchakarma_fee=%s total_fee=%s "
             "discount=%s discount_type=%s payment_mode=%s charge_type=%s "
-            "follow_up_reason=%s next_visit=%s visit_date=%s medicines=%s",
+            "followup_status=%s next_visit_date=%s visit_datetime=%s medicines=%s",
             opd_id, pat_id,
             r.get('diagnosis', ''), r.get('symptoms', ''),
             r.get('clinical_notes', ''), pk,
@@ -241,8 +241,8 @@ def push():
             panchakarma_fee, total_fee,
             discount, discount_type,
             r.get('payment_mode', ''), r.get('charge_type', ''),
-            r.get('follow_up_reason', ''), r.get('next_visit', ''),
-            r.get('visit_date', ''), r.get('medicines', ''),
+            r.get('followup_status', ''), r.get('next_visit_date', ''),
+            r.get('visit_datetime', ''), r.get('medicines', ''),
         )
         result = OPDRecord.upsert(r)
         results['opd_records'].append(result)
@@ -318,8 +318,8 @@ def push_images(opd_id):
         logger.warning("OPD record not found: %s", opd_id)
         return jsonify({'error': 'OPD record not found'}), 404
 
-    logger.info("OPD found: patient_id=%s visit_date=%s",
-                opd.get('patient_id'), opd.get('visit_date'))
+    logger.info("OPD found: patient_id=%s visit_datetime=%s",
+                opd.get('patient_id'), opd.get('visit_datetime'))
 
     if 'images' not in request.files:
         logger.warning("No 'images' field in request for OPD %s", opd_id)
@@ -343,12 +343,12 @@ def push_images(opd_id):
         return jsonify({'error': 'No valid image files provided'}), 400
 
     try:
-        visit_date = datetime.fromisoformat(opd['visit_date'])
-        logger.info("Parsed visit_date: %s", visit_date)
+        visit_date = datetime.fromisoformat(opd['visit_datetime'])
+        logger.info("Parsed visit_datetime: %s", visit_date)
     except (ValueError, TypeError):
         visit_date = datetime.utcnow()
-        logger.warning("Could not parse visit_date '%s', using current time: %s",
-                       opd.get('visit_date'), visit_date)
+        logger.warning("Could not parse visit_datetime '%s', using current time: %s",
+                       opd.get('visit_datetime'), visit_date)
 
     if IS_CLOUD:
         logger.info("CLOUD MODE: uploading %d image(s) directly to Drive for OPD %s",
@@ -448,7 +448,7 @@ def push_images(opd_id):
 def clear_all_data():
     """
     Clear ALL data from the Google Sheet (opd_visits tab) and
-    the backend SQLite database (opd_records, patients, etc.).
+    the backend database (opd_visits, patients, etc.).
     Returns the number of rows cleared from the sheet.
     """
     logger.warning("CLEAR ALL DATA requested by user %s", get_jwt_identity())
@@ -477,12 +477,15 @@ def clear_all_data():
         # Re-create default user
         try:
             db.execute(
-                "INSERT INTO users (username, password, name, created_at) VALUES (%s, %s, %s, %s) ON CONFLICT (username) DO NOTHING",
+                "INSERT INTO users (username, password_hash, email, role, name, created_at, clinic_id) VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (username) DO NOTHING",
                 (
                     DEFAULT_ADMIN_USERNAME,
                     default_admin_password_hash,
+                    'admin@medihive.local',
+                    'Doctor',
                     DEFAULT_ADMIN_NAME,
                     now,
+                    'CLI001',
                 )
             )
             db.commit()

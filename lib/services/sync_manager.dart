@@ -244,12 +244,13 @@ class SyncManager extends ChangeNotifier {
     final createdDt = DateTime.tryParse(createdAt) ?? DateTime.now();
     return {
       'id': await _patientSyncId(row),
-      'name': row['full_name'],
+      'full_name': row['full_name'],
       'dob': row['dob'] ?? '',
       'age': row['age'] ?? 0,
       'gender': row['gender'] ?? 'Not Specified',
       'blood_group': row['blood_group'] ?? 'Not Specified',
-      'mobile': row['mobile_number'],
+      'mobile_number': row['mobile_number'],
+      'alternate_mobile': row['alternate_mobile'],
       'address': row['address'] ?? '',
       'created_at': createdDt.toIso8601String(),
       'updated_at': _resolveUpdatedAt(row),
@@ -276,24 +277,24 @@ class SyncManager extends ChangeNotifier {
     return {
       'id': row['opd_id']?.toString() ?? _opdToStringId(row['id'] as int),
       'patient_id': patientSyncId,
-      'type': row['opd_type'] ?? 'consultation',
+      'opd_type': row['opd_type'] ?? 'consultation',
       'symptoms': row['symptoms'] ?? '',
       'diagnosis': row['diagnosis'] ?? '',
       'medicines': row['medicines'] ?? '',
-      'visit_date': DateTime.tryParse(visitDt)?.toIso8601String() ?? createdDt.toIso8601String(),
+      'visit_datetime': DateTime.tryParse(visitDt)?.toIso8601String() ?? createdDt.toIso8601String(),
       'clinical_notes': row['clinical_notes'] ?? '',
       'panchakarma_notes': pkNotes,
       'consultation_fee': (row['consultation_fee'] as num?)?.toString() ?? '',
       'medicine_fee': (row['medicine_fee'] as num?)?.toString() ?? '',
       'panchakarma_fee': (row['panchakarma_fee'] as num?)?.toString() ?? '',
       'total_fee': (row['total_fee'] as num?)?.toString() ?? '',
-      'discount': (row['discount_value'] as num?)?.toString() ?? '',
+      'discount_value': (row['discount_value'] as num?)?.toString() ?? '',
       'discount_type': row['discount_type'] ?? '',
       'payment_mode': row['payment_mode'] ?? '',
       'charge_type': row['charge_type'] ?? '',
       'previous_visit_date': '',
-      'follow_up_reason': row['followup_status'] ?? '',
-      'next_visit': row['next_visit_date'] ?? '',
+      'followup_status': row['followup_status'] ?? '',
+      'next_visit_date': row['next_visit_date'] ?? '',
       'blood_group': patientBloodGroup,
       'created_at': createdDt.toIso8601String(),
       'updated_at': _resolveUpdatedAt(row),
@@ -307,9 +308,9 @@ class SyncManager extends ChangeNotifier {
     return {
       'id': sqliteId,
       'sync_id': syncId,
-      'full_name': remote['name']?.toString() ?? '',
-      'mobile_number': remote['mobile']?.toString() ?? '',
-      'alternate_mobile': null,
+      'full_name': remote['full_name']?.toString() ?? '',
+      'mobile_number': remote['mobile_number']?.toString() ?? '',
+      'alternate_mobile': remote['alternate_mobile']?.toString(),
       'gender': remote['gender']?.toString() ?? 'Not Specified',
       'dob': remote['dob']?.toString() ?? '',
       'age': int.tryParse(remote['age']?.toString() ?? '') ?? 0,
@@ -333,8 +334,8 @@ class SyncManager extends ChangeNotifier {
       'id': sqliteId,
       'opd_id': remote['id']?.toString() ?? '',
       'patient_id': localPatientId,
-      'visit_datetime': remote['visit_date']?.toString() ?? '',
-      'opd_type': remote['type']?.toString() ?? 'consultation',
+      'visit_datetime': remote['visit_datetime']?.toString() ?? '',
+      'opd_type': remote['opd_type']?.toString() ?? 'consultation',
       'charge_type': remote['charge_type']?.toString() ?? '',
       'diagnosis': remote['diagnosis']?.toString() ?? '',
       'symptoms': remote['symptoms']?.toString() ?? '',
@@ -343,9 +344,9 @@ class SyncManager extends ChangeNotifier {
       'consultation_fee': double.tryParse(remote['consultation_fee']?.toString() ?? '') ?? 0.0,
       'medicine_fee': double.tryParse(remote['medicine_fee']?.toString() ?? '') ?? 0.0,
       'payment_mode': remote['payment_mode']?.toString() ?? '',
-      'next_visit_date': remote['next_visit']?.toString() ?? '',
-      'followup_status': remote['follow_up_reason']?.toString() ?? '',
-      'discount_value': double.tryParse(remote['discount']?.toString() ?? '') ?? 0.0,
+      'next_visit_date': remote['next_visit_date']?.toString() ?? '',
+      'followup_status': remote['followup_status']?.toString() ?? '',
+      'discount_value': double.tryParse(remote['discount_value']?.toString() ?? '') ?? 0.0,
       'created_at': remote['created_at']?.toString() ?? DateTime.now().toIso8601String(),
       'updated_at': remote['updated_at']?.toString() ?? DateTime.now().toIso8601String(),
       'medicines': remote['medicines']?.toString() ?? '',
@@ -441,9 +442,9 @@ class SyncManager extends ChangeNotifier {
             'clinical_notes=${opd['clinical_notes']} panchakarma_notes=${opd['panchakarma_notes']} '
             'consultation_fee=${opd['consultation_fee']} medicine_fee=${opd['medicine_fee']} '
             'panchakarma_fee=${opd['panchakarma_fee']} total_fee=${opd['total_fee']} '
-            'discount=${opd['discount']} discount_type=${opd['discount_type']} '
-            'payment_mode=${opd['payment_mode']} follow_up_reason=${opd['follow_up_reason']} '
-            'next_visit=${opd['next_visit']} visit_date=${opd['visit_date']}');
+            'discount_value=${opd['discount_value']} discount_type=${opd['discount_type']} '
+            'payment_mode=${opd['payment_mode']} followup_status=${opd['followup_status']} '
+            'next_visit_date=${opd['next_visit_date']} visit_datetime=${opd['visit_datetime']}');
       }
     }
     if (pushPatients.isNotEmpty || pushOpd.isNotEmpty || pushAppts.isNotEmpty) {
@@ -724,7 +725,7 @@ class SyncManager extends ChangeNotifier {
             }
 
             // Ensure follow-up appointment in Hive if next_visit_date is set
-            final nextVisit = map['next_visit']?.toString() ?? '';
+            final nextVisit = map['next_visit_date']?.toString() ?? '';
             if (nextVisit.isNotEmpty) {
               final visitDate = DateTime.tryParse(nextVisit);
               if (visitDate != null) {

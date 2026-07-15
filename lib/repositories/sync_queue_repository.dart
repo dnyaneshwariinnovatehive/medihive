@@ -54,8 +54,10 @@ class SyncQueueRepository {
     debugPrint('SYNC_QUEUE INSERT: id=${row['id']} type=${row['entity_type']} entity_id=${row['entity_id']} status=${row['status']}');
     final result = await db.insert(tableSyncQueue, {
       'id': row['id'],
+      'clinic_id': row['clinic_id'] ?? '',
       'entity_type': row['entity_type'],
       'entity_id': row['entity_id'],
+      'operation': row['operation'] ?? 'upsert',
       'status': row['status'] ?? 'pending',
       'retry_count': row['retry_count'] ?? 0,
       'last_error': row['last_error'],

@@ -148,43 +148,57 @@ def _init_db():
         db.execute("""
             CREATE TABLE IF NOT EXISTS patients (
                 id              TEXT PRIMARY KEY,
-                name            TEXT NOT NULL,
+                clinic_id       TEXT DEFAULT '',
+                full_name       TEXT NOT NULL,
+                mobile_number   TEXT DEFAULT '',
+                alternate_mobile TEXT DEFAULT '',
+                gender          TEXT DEFAULT 'Not Specified',
                 dob             TEXT DEFAULT '',
                 age             INTEGER DEFAULT 0,
-                gender          TEXT DEFAULT 'Not Specified',
                 blood_group     TEXT DEFAULT 'Not Specified',
-                mobile          TEXT DEFAULT '',
                 address         TEXT DEFAULT '',
                 last_diagnosis   TEXT DEFAULT '',
                 last_visit_date  TEXT DEFAULT '',
                 created_at      TEXT NOT NULL,
                 updated_at      TEXT NOT NULL,
                 is_synced       INTEGER DEFAULT 0,
-                user_id         TEXT DEFAULT '',
-                clinic_id       TEXT DEFAULT ''
+                user_id         TEXT DEFAULT ''
             );
         """)
+        # Migrations for patients schema renaming
+        try:
+            db.execute("ALTER TABLE patients RENAME COLUMN name TO full_name")
+        except Exception:
+            db.rollback()
+        try:
+            db.execute("ALTER TABLE patients RENAME COLUMN mobile TO mobile_number")
+        except Exception:
+            db.rollback()
+        try:
+            db.execute("ALTER TABLE patients ADD COLUMN alternate_mobile TEXT DEFAULT ''")
+        except Exception:
+            db.rollback()
         db.execute("""
-            CREATE TABLE IF NOT EXISTS opd_records (
+            CREATE TABLE IF NOT EXISTS opd_visits (
                 id                  TEXT PRIMARY KEY,
                 patient_id          TEXT NOT NULL,
-                type                TEXT DEFAULT 'consultation',
+                opd_type            TEXT DEFAULT 'consultation',
                 symptoms            TEXT DEFAULT '',
                 diagnosis           TEXT DEFAULT '',
                 medicines           TEXT DEFAULT '',
-                visit_date          TEXT NOT NULL,
+                visit_datetime      TEXT NOT NULL,
                 clinical_notes      TEXT DEFAULT '',
                 consultation_fee    TEXT DEFAULT '0',
                 medicine_fee        TEXT DEFAULT '0',
                 panchakarma_fee     TEXT DEFAULT '0',
                 total_fee           TEXT DEFAULT '0',
-                discount            TEXT DEFAULT '0',
+                discount_value      TEXT DEFAULT '0',
                 discount_type       TEXT DEFAULT 'None',
                 payment_mode        TEXT DEFAULT '',
                 charge_type         TEXT DEFAULT '',
                 previous_visit_date TEXT DEFAULT '',
-                follow_up_reason    TEXT DEFAULT '',
-                next_visit          TEXT DEFAULT '',
+                followup_status     TEXT DEFAULT '',
+                next_visit_date     TEXT DEFAULT '',
                 blood_group         TEXT DEFAULT '',
                 image_links         TEXT DEFAULT '',
                 panchakarma_notes   TEXT DEFAULT '',
@@ -196,21 +210,47 @@ def _init_db():
             );
         """)
         
+        # Rename opd_records → opd_visits for existing databases
+        try:
+            db.execute("ALTER TABLE opd_records RENAME TO opd_visits")
+        except Exception:
+            db.rollback()
+        # Rename columns for existing databases
+        try:
+            db.execute("ALTER TABLE opd_visits RENAME COLUMN visit_date TO visit_datetime")
+        except Exception:
+            db.rollback()
+        try:
+            db.execute("ALTER TABLE opd_visits RENAME COLUMN type TO opd_type")
+        except Exception:
+            db.rollback()
+        try:
+            db.execute("ALTER TABLE opd_visits RENAME COLUMN next_visit TO next_visit_date")
+        except Exception:
+            db.rollback()
+        try:
+            db.execute("ALTER TABLE opd_visits RENAME COLUMN follow_up_reason TO followup_status")
+        except Exception:
+            db.rollback()
+        try:
+            db.execute("ALTER TABLE opd_visits RENAME COLUMN discount TO discount_value")
+        except Exception:
+            db.rollback()
         # Add columns for existing databases.
         try:
-            db.execute("ALTER TABLE opd_records ADD COLUMN panchakarma_notes TEXT DEFAULT ''")
+            db.execute("ALTER TABLE opd_visits ADD COLUMN panchakarma_notes TEXT DEFAULT ''")
         except Exception:
             db.rollback()
         try:
-            db.execute("ALTER TABLE opd_records ADD COLUMN panchakarma_fee TEXT DEFAULT '0'")
+            db.execute("ALTER TABLE opd_visits ADD COLUMN panchakarma_fee TEXT DEFAULT '0'")
         except Exception:
             db.rollback()
         try:
-            db.execute("ALTER TABLE opd_records ADD COLUMN total_fee TEXT DEFAULT '0'")
+            db.execute("ALTER TABLE opd_visits ADD COLUMN total_fee TEXT DEFAULT '0'")
         except Exception:
             db.rollback()
         try:
-            db.execute("ALTER TABLE opd_records ADD COLUMN discount_type TEXT DEFAULT 'None'")
+            db.execute("ALTER TABLE opd_visits ADD COLUMN discount_type TEXT DEFAULT 'None'")
         except Exception:
             db.rollback()
         db.execute("""
@@ -229,28 +269,128 @@ def _init_db():
         """)
         db.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                id          SERIAL PRIMARY KEY,
-                username    TEXT UNIQUE NOT NULL,
-                password    TEXT NOT NULL,
-                name        TEXT DEFAULT 'Doctor',
-                created_at  TEXT NOT NULL,
-                clinic_id   TEXT DEFAULT ''
+                id              SERIAL PRIMARY KEY,
+                clinic_id       TEXT NOT NULL REFERENCES clinics(id) ON DELETE CASCADE,
+                username        VARCHAR(50) UNIQUE NOT NULL,
+                password_hash   VARCHAR(255) NOT NULL,
+                email           VARCHAR(255) NOT NULL,
+                role            VARCHAR(20) DEFAULT 'Receptionist',
+                name            TEXT DEFAULT 'Doctor',
+                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                reset_otp       VARCHAR(10),
+                otp_expiry      TIMESTAMP
             );
         """)
+        # Migrations for users schema update
+        try:
+            db.execute("ALTER TABLE users RENAME COLUMN password TO password_hash")
+        except Exception:
+            db.rollback()
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN email VARCHAR(255) DEFAULT ''")
+        except Exception:
+            db.rollback()
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN role VARCHAR(20) DEFAULT 'Receptionist'")
+        except Exception:
+            db.rollback()
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN reset_otp VARCHAR(10)")
+        except Exception:
+            db.rollback()
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN otp_expiry TIMESTAMP")
+        except Exception:
+            db.rollback()
+
+        # Create missing master/support tables
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS calendar_notes (
+                id              SERIAL PRIMARY KEY,
+                clinic_id       TEXT NOT NULL REFERENCES clinics(id) ON DELETE CASCADE,
+                note_date       DATE NOT NULL,
+                note_text       TEXT,
+                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at      TIMESTAMP,
+                UNIQUE (clinic_id, note_date)
+            );
+        """)
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS clinic_settings (
+                id              SERIAL PRIMARY KEY,
+                clinic_id       TEXT NOT NULL REFERENCES clinics(id) ON DELETE CASCADE UNIQUE,
+                doctor_name     VARCHAR(255),
+                doctor_email    VARCHAR(255),
+                doctor_contact  VARCHAR(50),
+                doctor_license_no VARCHAR(100),
+                doctor_photo_path VARCHAR(500),
+                clinic_name     VARCHAR(255),
+                clinic_logo_path VARCHAR(500),
+                clinic_address  TEXT,
+                clinic_phone    VARCHAR(50),
+                website         VARCHAR(255),
+                operating_hours VARCHAR(255),
+                smtp_email      VARCHAR(255),
+                smtp_password   VARCHAR(255),
+                smtp_server     VARCHAR(255),
+                smtp_port       VARCHAR(10),
+                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at      TIMESTAMP
+            );
+        """)
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS medicines (
+                id              SERIAL PRIMARY KEY,
+                clinic_id       TEXT NOT NULL REFERENCES clinics(id) ON DELETE CASCADE,
+                name            VARCHAR(255) NOT NULL,
+                UNIQUE (clinic_id, name)
+            );
+        """)
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS symptoms_master (
+                id              SERIAL PRIMARY KEY,
+                clinic_id       TEXT NOT NULL REFERENCES clinics(id) ON DELETE CASCADE,
+                name            TEXT NOT NULL,
+                UNIQUE (clinic_id, name)
+            );
+        """)
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS sync_queue (
+                id              SERIAL PRIMARY KEY,
+                clinic_id       TEXT NOT NULL REFERENCES clinics(id) ON DELETE CASCADE,
+                entity_type     VARCHAR(20) NOT NULL,
+                entity_id       VARCHAR(100) NOT NULL,
+                status          VARCHAR(20) DEFAULT 'PENDING',
+                retry_count     INTEGER DEFAULT 0,
+                last_error      TEXT,
+                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_attempt    TIMESTAMP
+            );
+        """)
+        db.execute(
+            """
+            INSERT INTO clinics (id, name, created_at, updated_at)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (id) DO NOTHING
+            """,
+            ('CLI001', 'Default Clinic', datetime.utcnow().isoformat(), datetime.utcnow().isoformat())
+        )
         default_admin_password_hash = hashlib.sha256(
             DEFAULT_ADMIN_PASSWORD.encode()
         ).hexdigest()
         db.execute(
             """
-            INSERT INTO users (username, password, name, created_at)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO users (username, password_hash, clinic_id, email, name, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (username) DO UPDATE SET
-                password = EXCLUDED.password,
+                password_hash = EXCLUDED.password_hash,
                 name = EXCLUDED.name
             """,
             (
                 DEFAULT_ADMIN_USERNAME,
                 default_admin_password_hash,
+                'CLI001',
+                'admin@medihive.local',
                 DEFAULT_ADMIN_NAME,
                 datetime.utcnow().isoformat(),
             ),
@@ -268,10 +408,10 @@ def _init_db():
             CREATE UNIQUE INDEX IF NOT EXISTS idx_fcm_token ON fcm_tokens(fcm_token);
         """)
         db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_opd_patient ON opd_records(patient_id);
+            CREATE INDEX IF NOT EXISTS idx_opd_patient ON opd_visits(patient_id);
         """)
         db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_opd_visit ON opd_records(visit_date);
+            CREATE INDEX IF NOT EXISTS idx_opd_visit ON opd_visits(visit_datetime);
         """)
         db.execute("""
             CREATE INDEX IF NOT EXISTS idx_appt_date ON appointments(date_time);
@@ -348,6 +488,29 @@ def _init_db():
                 error_message   TEXT DEFAULT '',
                 created_at      TEXT NOT NULL
             );
+        """)
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS patient_images (
+                id              SERIAL PRIMARY KEY,
+                clinic_id       TEXT NOT NULL REFERENCES clinics(id) ON DELETE CASCADE,
+                patient_id      TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+                opd_visit_id    TEXT REFERENCES opd_visits(id) ON DELETE SET NULL,
+                file_path       VARCHAR(500) NOT NULL,
+                image_type      VARCHAR(50) DEFAULT NULL,
+                sync_status     VARCHAR(30) DEFAULT 'Pending',
+                uploaded_at     TIMESTAMP DEFAULT NULL,
+                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                drive_url       TEXT DEFAULT NULL
+            );
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_patient_images_clinic ON patient_images(clinic_id);
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_patient_images_patient ON patient_images(patient_id);
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_patient_images_opd ON patient_images(opd_visit_id);
         """)
         db.commit()
         _db_initialized = True

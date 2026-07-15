@@ -650,14 +650,14 @@ def clear_opd_sheet_data():
     # ── Clear backend OPD records & patients ──
     try:
         db = get_db()
-        db.execute("DELETE FROM opd_records")
+        db.execute("DELETE FROM opd_visits")
         db.execute("DELETE FROM patients")
         db.execute("DELETE FROM deleted_entities")
         db.execute("DELETE FROM last_sync")
         db.execute("DELETE FROM settings WHERE key = 'spreadsheet_id'")
         db.commit()
         db.close()
-        logger.info("Backend database cleared (opd_records, patients, deleted_entities, last_sync)")
+        logger.info("Backend database cleared (opd_visits, patients, deleted_entities, last_sync)")
     except Exception as e:
         logger.error("Failed to clear backend database: %s", e)
 

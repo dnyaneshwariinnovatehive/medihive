@@ -1,4 +1,4 @@
-const int databaseVersion = 4;
+const int databaseVersion = 10;
 
 const String tablePatients = 'patients';
 const String tableOpdVisits = 'opd_visits';
@@ -14,28 +14,28 @@ const String tableDeviceRegistration = 'device_registration';
 
 String get createPatientsTable => '''
   CREATE TABLE $tablePatients (
-    id INTEGER NOT NULL,
-    sync_id TEXT,
-    full_name VARCHAR NOT NULL,
-    mobile_number VARCHAR NOT NULL,
-    alternate_mobile VARCHAR,
-    gender VARCHAR NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clinic_id TEXT,
+    full_name VARCHAR(255) NOT NULL,
+    mobile_number VARCHAR(20) NOT NULL,
+    alternate_mobile VARCHAR(20),
+    gender VARCHAR(20) NOT NULL,
     dob DATE,
     age INTEGER,
-    blood_group VARCHAR,
-    address VARCHAR,
-    clinic_id TEXT,
-    created_at DATETIME,
+    blood_group VARCHAR(10),
+    address VARCHAR(500),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME,
-    PRIMARY KEY (id)
+    sync_id TEXT
   )
 ''';
 
 String get createOpdVisitsTable => '''
   CREATE TABLE $tableOpdVisits (
-    id INTEGER NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     opd_id VARCHAR NOT NULL,
     patient_id INTEGER NOT NULL,
+    clinic_id INTEGER,
     visit_datetime DATETIME NOT NULL,
     opd_type VARCHAR,
     charge_type VARCHAR,
@@ -51,31 +51,29 @@ String get createOpdVisitsTable => '''
     payment_mode VARCHAR,
     next_visit_date DATE,
     followup_status VARCHAR,
-    clinic_id TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME,
     medicines TEXT,
     panchakarma_notes TEXT,
-    PRIMARY KEY (id),
     FOREIGN KEY (patient_id) REFERENCES $tablePatients (id)
   )
 ''';
 
 String get createCalendarNotesTable => '''
   CREATE TABLE $tableCalendarNotes (
-    id INTEGER NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clinic_id TEXT,
     note_date DATE NOT NULL,
     note_text TEXT,
     created_at DATETIME,
     updated_at DATETIME,
-    PRIMARY KEY (id),
     UNIQUE (note_date)
   )
 ''';
 
 String get createClinicSettingsTable => '''
   CREATE TABLE $tableClinicSettings (
-    id INTEGER NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clinic_id TEXT,
     doctor_name VARCHAR(255),
     doctor_email VARCHAR(255),
     doctor_contact VARCHAR(50),
@@ -92,53 +90,55 @@ String get createClinicSettingsTable => '''
     smtp_server VARCHAR(255),
     smtp_port VARCHAR(10),
     created_at DATETIME,
-    updated_at DATETIME,
-    PRIMARY KEY (id)
+    updated_at DATETIME
   )
 ''';
 
 String get createUsersTable => '''
   CREATE TABLE $tableUsers (
-    id INTEGER NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clinic_id TEXT NOT NULL,
     username VARCHAR(50) NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     email VARCHAR(255) NOT NULL,
+    role VARCHAR(20) DEFAULT 'Receptionist',
     created_at DATETIME,
     reset_otp VARCHAR(10),
     otp_expiry DATETIME,
-    PRIMARY KEY (id),
     UNIQUE (username)
   )
 ''';
 
 String get createMedicinesTable => '''
   CREATE TABLE $tableMedicines (
-    id INTEGER NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clinic_id TEXT NOT NULL,
     name VARCHAR NOT NULL,
-    PRIMARY KEY (id),
-    UNIQUE (name)
+    UNIQUE (clinic_id, name)
   )
 ''';
 
 String get createSymptomsMasterTable => '''
   CREATE TABLE $tableSymptomsMaster (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE
+    clinic_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    UNIQUE (clinic_id, name)
   )
 ''';
 
 String get createPatientImagesTable => '''
   CREATE TABLE $tablePatientImages (
-    id INTEGER NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clinic_id INTEGER NOT NULL,
     patient_id INTEGER NOT NULL,
-    opd_visit_id INTEGER NOT NULL,
-    file_path VARCHAR NOT NULL,
-    image_type VARCHAR,
-    sync_status VARCHAR,
-    uploaded_at DATETIME,
+    opd_visit_id INTEGER DEFAULT NULL,
+    file_path VARCHAR(500) NOT NULL,
+    image_type VARCHAR(50) DEFAULT NULL,
+    sync_status VARCHAR(30) DEFAULT 'Pending',
+    uploaded_at DATETIME DEFAULT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    drive_url TEXT,
-    PRIMARY KEY (id),
+    drive_url TEXT DEFAULT NULL,
     FOREIGN KEY (patient_id) REFERENCES $tablePatients (id),
     FOREIGN KEY (opd_visit_id) REFERENCES $tableOpdVisits (id)
   )
@@ -146,17 +146,16 @@ String get createPatientImagesTable => '''
 
 String get createSyncQueueTable => '''
   CREATE TABLE $tableSyncQueue (
-    id INTEGER NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clinic_id TEXT NOT NULL,
     entity_type VARCHAR(20) NOT NULL,
     entity_id VARCHAR(100) NOT NULL,
     operation VARCHAR(20) DEFAULT 'upsert',
     status VARCHAR(20),
-    retry_count INTEGER,
+    retry_count INTEGER DEFAULT 0,
     last_error TEXT,
-    clinic_id TEXT,
-    created_at DATETIME,
-    last_attempt DATETIME,
-    PRIMARY KEY (id)
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_attempt DATETIME
   )
 ''';
 
