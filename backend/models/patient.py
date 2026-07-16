@@ -14,7 +14,7 @@ class Patient:
     @staticmethod
     def all():
         db = get_db()
-        rows = db.execute("SELECT * FROM patients ORDER BY updated_at DESC").fetchall()
+        rows = db.execute("SELECT * FROM patients ORDER BY created_at DESC").fetchall()
         db.close()
         return [Patient.dict_from_row(r) for r in rows]
 
@@ -31,19 +31,15 @@ class Patient:
         db = get_db()
         db.execute("""
             INSERT INTO patients (id, full_name, dob, age, gender, blood_group, mobile_number, alternate_mobile, address,
-                                  last_diagnosis, last_visit_date, created_at, updated_at,
-                                  is_synced, user_id, clinic_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s)
+                                  created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             data['id'], data['full_name'], data.get('dob', ''),
             data.get('age', 0), data.get('gender', 'Not Specified'),
             data.get('blood_group', 'Not Specified'),
             data.get('mobile_number', ''), data.get('alternate_mobile', ''),
             data.get('address', ''),
-            data.get('last_diagnosis', ''), data.get('last_visit_date', ''),
-            now, now,
-            data.get('user_id', ''),
-            data.get('clinic_id', '')
+            now
         ))
         db.commit()
         db.close()
@@ -51,10 +47,8 @@ class Patient:
 
     @staticmethod
     def update(patient_id, data):
-        now = datetime.utcnow().isoformat()
         allowed = ('full_name', 'dob', 'age', 'gender', 'blood_group', 'mobile_number',
-                   'alternate_mobile', 'address', 'last_diagnosis', 'last_visit_date',
-                   'user_id', 'clinic_id')
+                   'alternate_mobile', 'address')
         fields = []
         values = []
         for k in allowed:
@@ -63,8 +57,6 @@ class Patient:
                 values.append(data[k])
         if not fields:
             return Patient.get(patient_id)
-        fields.append("updated_at = %s")
-        values.append(now)
         values.append(patient_id)
         db = get_db()
         db.execute(f"UPDATE patients SET {', '.join(fields)} WHERE id = %s", values)
@@ -111,32 +103,11 @@ class Patient:
         return Patient.create(data)
 
     @staticmethod
-    def by_clinic(clinic_id):
+    def updated_since(timestamp):
         db = get_db()
         rows = db.execute(
-            "SELECT * FROM patients WHERE clinic_id = %s ORDER BY updated_at DESC",
-            (clinic_id,)
+            "SELECT * FROM patients WHERE created_at > %s ORDER BY created_at",
+            (timestamp,)
         ).fetchall()
-        db.close()
-        return [Patient.dict_from_row(r) for r in rows]
-
-    @staticmethod
-    def updated_since(timestamp, user_id=None, clinic_id=None):
-        db = get_db()
-        if clinic_id:
-            rows = db.execute(
-                "SELECT * FROM patients WHERE updated_at > %s AND clinic_id = %s ORDER BY updated_at",
-                (timestamp, clinic_id)
-            ).fetchall()
-        elif user_id:
-            rows = db.execute(
-                "SELECT * FROM patients WHERE updated_at > %s AND (user_id = %s OR user_id = '') ORDER BY updated_at",
-                (timestamp, user_id)
-            ).fetchall()
-        else:
-            rows = db.execute(
-                "SELECT * FROM patients WHERE updated_at > %s ORDER BY updated_at",
-                (timestamp,)
-            ).fetchall()
         db.close()
         return [Patient.dict_from_row(r) for r in rows]

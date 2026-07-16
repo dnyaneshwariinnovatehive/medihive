@@ -72,9 +72,9 @@ def create_app():
             opd_visits = db.execute("SELECT COUNT(*) AS count FROM opd_visits").fetchone()
             recent_opd = db.execute(
                 """
-                SELECT id, patient_id, visit_datetime, image_links, updated_at
+                SELECT id, patient_id, visit_datetime
                 FROM opd_visits
-                ORDER BY updated_at DESC
+                ORDER BY created_at DESC
                 LIMIT 10
                 """
             ).fetchall()

@@ -36,7 +36,6 @@ def login():
         'user': {
             'id': str(user['id']),
             'username': user['username'],
-            'name': user['name'],
         }
     }), 200
 
@@ -49,7 +48,6 @@ def register():
 
     username = data.get('username', '').strip()
     password = data.get('password', '')
-    name = data.get('name', 'Doctor')
 
     if not username or not password:
         return jsonify({'error': 'Username and password required'}), 400
@@ -63,11 +61,9 @@ def register():
     hashed = hashlib.sha256(password.encode()).hexdigest()
     now = datetime.utcnow().isoformat()
     email = data.get('email', f"{username}@medihive.local")
-    clinic_id = data.get('clinic_id', 'CLI001')
-    role = data.get('role', 'Doctor')
     row = db.execute(
-        "INSERT INTO users (username, password_hash, email, role, name, created_at, clinic_id) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
-        (username, hashed, email, role, name, now, clinic_id)
+        "INSERT INTO users (username, password_hash, email, created_at) VALUES (%s, %s, %s, %s) RETURNING id",
+        (username, hashed, email, now)
     ).fetchone()
     db.commit()
     user_id = row['id']
@@ -80,7 +76,6 @@ def register():
         'user': {
             'id': str(user_id),
             'username': username,
-            'name': name,
         }
     }), 201
 
@@ -91,7 +86,7 @@ def me():
     user_id = get_jwt_identity()
     db = get_db()
     user = db.execute(
-        "SELECT id, username, name, created_at FROM users WHERE id = %s",
+        "SELECT id, username, created_at FROM users WHERE id = %s",
         (user_id,)
     ).fetchone()
     db.close()

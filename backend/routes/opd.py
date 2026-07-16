@@ -40,14 +40,6 @@ def create_opd():
 
     record = OPDRecord.create(data)
 
-    # Update patient's last diagnosis and last visit
-    patient = Patient.get(data['patient_id'])
-    if patient:
-        Patient.update(data['patient_id'], {
-            'last_diagnosis': data.get('diagnosis', patient.get('last_diagnosis', '')),
-            'last_visit_date': data.get('visit_datetime', datetime.utcnow().isoformat()),
-        })
-
     return jsonify({'record': record}), 201
 
 
@@ -254,8 +246,7 @@ def upload_opd_images(opd_id):
         return jsonify({'error': 'Patient not found'}), 404
 
     urls_text = "\n".join(drive_urls)
-    OPDRecord.set_image_links(opd_id, urls_text)
-    logger.info("Image links persisted in opd_visits for OPD %s", opd_id)
+    logger.info("Image links for OPD %s: %s", opd_id, urls_text)
 
     sheet_update_ok = True
     row_data = build_sheet_row_data(opd, patient, drive_urls)

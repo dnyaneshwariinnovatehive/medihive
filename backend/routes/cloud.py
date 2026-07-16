@@ -93,8 +93,6 @@ def upload_changes():
     temp_id_map = {}
 
     for p in data.get('patients', []):
-        p['user_id'] = device_id
-        p['clinic_id'] = clinic_id
         old_id = p.get('id', '')
         is_temp = old_id.startswith('TEMP_')
         if is_temp:
@@ -102,11 +100,9 @@ def upload_changes():
             temp_id_map[old_id] = p['id']
         patient = Patient.upsert(p)
         results['patients'].append(patient)
-        logger.info("CLOUD DEVICE DEBUG: stored patient id=%s clinic_id=%s", p['id'], p.get('clinic_id', ''))
+        logger.info("CLOUD DEVICE DEBUG: stored patient id=%s", p['id'])
 
     for r in data.get('opd_records', []):
-        r['user_id'] = device_id
-        r['clinic_id'] = clinic_id
         pat_id = r.get('patient_id', '')
         if pat_id in temp_id_map:
             r['patient_id'] = temp_id_map[pat_id]
@@ -114,13 +110,11 @@ def upload_changes():
                      r.get('id'), r.get('panchakarma_fee', ''), r.get('total_fee', ''), r.get('discount_type', ''))
         result = OPDRecord.upsert(r)
         results['opd_records'].append(result)
-        logger.info("CLOUD DEVICE DEBUG: stored opd id=%s clinic_id=%s", r['id'], r.get('clinic_id', ''))
+        logger.info("CLOUD DEVICE DEBUG: stored opd id=%s", r['id'])
         # Sync to Google Sheets from any network
         _sync_opd_to_google_sheets(r)
 
     for a in data.get('appointments', []):
-        a['user_id'] = device_id
-        a['clinic_id'] = clinic_id
         results['appointments'].append(Appointment.upsert(a))
 
     for entry in data.get('deleted_entities', []):
@@ -165,9 +159,9 @@ def download_changes():
     if not _validate_device(device_id, clinic_id):
         return jsonify({'error': 'Invalid device or clinic'}), 401
 
-    patients = Patient.updated_since(last_sync, clinic_id=clinic_id)
-    opd_records = OPDRecord.updated_since(last_sync, clinic_id=clinic_id)
-    appointments = Appointment.updated_since(last_sync, clinic_id=clinic_id)
+    patients = Patient.updated_since(last_sync)
+    opd_records = OPDRecord.updated_since(last_sync)
+    appointments = Appointment.updated_since(last_sync)
     deleted_entities = DeletedEntity.since(last_sync, clinic_id=clinic_id)
 
     logger.info(
@@ -266,10 +260,9 @@ def cloud_upload_images(opd_id):
         else:
             logger.warning("CLOUD IMAGE DEBUG: upload_image_fileobj_to_drive returned None for image %d", i)
 
-    logger.info("CLOUD IMAGE DEBUG: updating image_links for OPD %s (urls count=%d)", opd_id, len(drive_urls))
+    logger.info("CLOUD IMAGE DEBUG: image links for OPD %s (urls count=%d)", opd_id, len(drive_urls))
     urls_text = "\n".join(drive_urls)
-    OPDRecord.set_image_links(opd_id, urls_text)
-    logger.info("CLOUD IMAGE DEBUG: updated image_links for OPD %s", opd_id)
+    logger.info("CLOUD IMAGE DEBUG: image URLs: %s", urls_text)
 
     sheet_ok = True
     try:
@@ -302,24 +295,7 @@ def cloud_upload_images(opd_id):
 @cloud_bp.route('/clinic-info', methods=['GET'])
 @jwt_required()
 def clinic_info():
-    """
-    Get clinic information for the authenticated user.
-    The user's clinic_id is determined from the user record.
-    """
-    user_id = get_jwt_identity()
-    db = get_db()
-    user = db.execute(
-        "SELECT clinic_id FROM users WHERE id = %s", (user_id,)
-    ).fetchone()
-    db.close()
-
-    if user and user['clinic_id']:
-        clinic = Clinic.get(user['clinic_id'])
-        if clinic:
-            return jsonify({'clinic': clinic}), 200
-        return jsonify({'error': 'Clinic not found'}), 404
-
-    return jsonify({'error': 'No clinic assigned to this user'}), 404
+    return jsonify({'error': 'Clinic info not available without clinic_id column'}), 400
 
 
 # ─── Cloud Sync Log Helper ────────────────────────────
@@ -361,8 +337,6 @@ def sync_cloud_upload():
     temp_id_map = {}
 
     for p in data.get('patients', []):
-        p['user_id'] = device_id
-        p['clinic_id'] = clinic_id
         old_id = p.get('id', '')
         is_temp = old_id.startswith('TEMP_')
         if is_temp:
@@ -372,8 +346,6 @@ def sync_cloud_upload():
         results['patients'].append(patient)
 
     for r in data.get('opd_records', []):
-        r['user_id'] = device_id
-        r['clinic_id'] = clinic_id
         pat_id = r.get('patient_id', '')
         if pat_id in temp_id_map:
             r['patient_id'] = temp_id_map[pat_id]
@@ -382,8 +354,6 @@ def sync_cloud_upload():
         _sync_opd_to_google_sheets(r)
 
     for a in data.get('appointments', []):
-        a['user_id'] = device_id
-        a['clinic_id'] = clinic_id
         results['appointments'].append(Appointment.upsert(a))
 
     deleted_count = 0
@@ -432,9 +402,9 @@ def sync_cloud_download():
 
     logger.info("Cloud download for clinic=%s last_sync=%s", clinic_id, last_sync)
 
-    patients = Patient.updated_since(last_sync, clinic_id=clinic_id)
-    opd_records = OPDRecord.updated_since(last_sync, clinic_id=clinic_id)
-    appointments = Appointment.updated_since(last_sync, clinic_id=clinic_id)
+    patients = Patient.updated_since(last_sync)
+    opd_records = OPDRecord.updated_since(last_sync)
+    appointments = Appointment.updated_since(last_sync)
     deleted_entities = DeletedEntity.since(last_sync, clinic_id=clinic_id)
 
     _log_sync(

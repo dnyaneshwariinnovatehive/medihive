@@ -108,11 +108,10 @@ class TestPostgreSQLQueryPatterns(unittest.TestCase):
         db = get_db()
         db.execute("""
             INSERT INTO patients (id, full_name, dob, age, gender, blood_group, mobile_number, alternate_mobile,
-                                  address, last_diagnosis, last_visit_date,
-                                  created_at, updated_at, is_synced, user_id, clinic_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s)
+                                  address, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, ('P001', 'Test Patient', '1990-01-01', 34, 'Male', 'O+', '1234567890', '',
-              'Test Address', '', '', now, now, '', 'CLI001'))
+              'Test Address', now))
         db.commit()
         db.close()
 
@@ -121,15 +120,13 @@ class TestPostgreSQLQueryPatterns(unittest.TestCase):
         db.close()
         assert row is not None
         assert row['full_name'] == 'Test Patient'
-        assert row['clinic_id'] == 'CLI001'
 
     def test_04_patient_update_dynamic_fields(self):
         from database import get_db
-        now = datetime.utcnow().isoformat()
         db = get_db()
         # Simulate the dynamic UPDATE pattern used in patient.py
-        fields = ["full_name = %s", "age = %s", "updated_at = %s"]
-        values = ['Updated Name', 35, now]
+        fields = ["full_name = %s", "age = %s"]
+        values = ['Updated Name', 35]
         values.append('P001')
         db.execute(
             f"UPDATE patients SET {', '.join(fields)} WHERE id = %s",
@@ -183,9 +180,9 @@ class TestPostgreSQLQueryPatterns(unittest.TestCase):
         # Re-insert patient for FK
         db = get_db()
         db.execute("""
-            INSERT INTO patients (id, full_name, created_at, updated_at, is_synced, clinic_id)
-            VALUES (%s, %s, %s, %s, 0, %s) ON CONFLICT DO NOTHING
-        """, ('P002', 'OPD Patient', now, now, 'CLI001'))
+            INSERT INTO patients (id, full_name, created_at)
+            VALUES (%s, %s, %s) ON CONFLICT DO NOTHING
+        """, ('P002', 'OPD Patient', now))
         db.commit()
         db.close()
 
@@ -194,16 +191,16 @@ class TestPostgreSQLQueryPatterns(unittest.TestCase):
             INSERT INTO opd_visits
                 (id, patient_id, opd_type, symptoms, diagnosis, medicines,
                  visit_datetime, clinical_notes, consultation_fee, medicine_fee,
-                 discount_value, payment_mode, charge_type, previous_visit_date,
-                 followup_status, next_visit_date, blood_group, image_links,
-                 created_at, updated_at, is_synced, user_id, clinic_id)
+                 discount_value, payment_mode, charge_type,
+                 followup_status, next_visit_date,
+                 created_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, 0, %s, %s)
+                    %s, %s, %s, %s, %s,
+                    %s)
         """, ('OPD001', 'P002', 'consultation', 'cough', 'cold', 'medicine',
-              now, '', '100', '50', '0', 'cash', 'general', '',
-              '', '', '', '',
-              now, now, '', 'CLI001'))
+              now, '', '100', '50', '0', 'cash', 'general',
+              '', '',
+              now))
         db.commit()
         db.close()
 
@@ -214,24 +211,6 @@ class TestPostgreSQLQueryPatterns(unittest.TestCase):
         db.close()
         assert row is not None
         assert row['patient_id'] == 'P002'
-
-    def test_08_opd_set_image_links(self):
-        from database import get_db
-        now = datetime.utcnow().isoformat()
-        db = get_db()
-        db.execute(
-            "UPDATE opd_visits SET image_links = %s, updated_at = %s WHERE id = %s",
-            ('http://example.com/img1', now, 'OPD001')
-        )
-        db.commit()
-        db.close()
-
-        db = get_db()
-        row = db.execute(
-            "SELECT image_links FROM opd_visits WHERE id = %s", ('OPD001',)
-        ).fetchone()
-        db.close()
-        assert row['image_links'] == 'http://example.com/img1'
 
     # ── Appointment Model ───────────────────────
 
@@ -264,9 +243,9 @@ class TestPostgreSQLQueryPatterns(unittest.TestCase):
         now = datetime.utcnow().isoformat()
         db = get_db()
         db.execute("""
-            INSERT INTO patients (id, full_name, created_at, updated_at, is_synced)
-            VALUES (%s, %s, %s, %s, 0) ON CONFLICT DO NOTHING
-        """, ('P002', 'Existing Patient', now, now))
+            INSERT INTO patients (id, full_name, created_at)
+            VALUES (%s, %s, %s) ON CONFLICT DO NOTHING
+        """, ('P002', 'Existing Patient', now))
         db.commit()
         db.close()
         # Verify no duplicate error, same row
@@ -310,9 +289,9 @@ class TestPostgreSQLQueryPatterns(unittest.TestCase):
         hashed = hashlib.sha256('test123'.encode()).hexdigest()
         db = get_db()
         row = db.execute(
-            "INSERT INTO users (username, password_hash, email, role, name, created_at, clinic_id) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
-            (username, hashed, 'test@example.com', 'Doctor', 'Test User', now, 'CLI001')
+            "INSERT INTO users (username, password_hash, email, created_at) "
+            "VALUES (%s, %s, %s, %s) RETURNING id",
+            (username, hashed, 'test@example.com', now)
         ).fetchone()
         db.commit()
         db.close()

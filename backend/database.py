@@ -148,21 +148,15 @@ def _init_db():
         db.execute("""
             CREATE TABLE IF NOT EXISTS patients (
                 id              TEXT PRIMARY KEY,
-                clinic_id       TEXT DEFAULT '',
                 full_name       TEXT NOT NULL,
-                mobile_number   TEXT DEFAULT '',
+                mobile_number   TEXT NOT NULL,
                 alternate_mobile TEXT DEFAULT '',
-                gender          TEXT DEFAULT 'Not Specified',
+                gender          TEXT NOT NULL DEFAULT 'Not Specified',
                 dob             TEXT DEFAULT '',
                 age             INTEGER DEFAULT 0,
                 blood_group     TEXT DEFAULT 'Not Specified',
                 address         TEXT DEFAULT '',
-                last_diagnosis   TEXT DEFAULT '',
-                last_visit_date  TEXT DEFAULT '',
-                created_at      TEXT NOT NULL,
-                updated_at      TEXT NOT NULL,
-                is_synced       INTEGER DEFAULT 0,
-                user_id         TEXT DEFAULT ''
+                created_at      TEXT NOT NULL
             );
         """)
         # Migrations for patients schema renaming
@@ -182,6 +176,7 @@ def _init_db():
             CREATE TABLE IF NOT EXISTS opd_visits (
                 id                  TEXT PRIMARY KEY,
                 patient_id          TEXT NOT NULL,
+                opd_id              TEXT,
                 opd_type            TEXT DEFAULT 'consultation',
                 symptoms            TEXT DEFAULT '',
                 diagnosis           TEXT DEFAULT '',
@@ -196,17 +191,10 @@ def _init_db():
                 discount_type       TEXT DEFAULT 'None',
                 payment_mode        TEXT DEFAULT '',
                 charge_type         TEXT DEFAULT '',
-                previous_visit_date TEXT DEFAULT '',
                 followup_status     TEXT DEFAULT '',
                 next_visit_date     TEXT DEFAULT '',
-                blood_group         TEXT DEFAULT '',
-                image_links         TEXT DEFAULT '',
                 panchakarma_notes   TEXT DEFAULT '',
-                created_at          TEXT NOT NULL,
-                updated_at          TEXT NOT NULL,
-                is_synced           INTEGER DEFAULT 0,
-                user_id             TEXT DEFAULT '',
-                clinic_id           TEXT DEFAULT ''
+                created_at          TEXT NOT NULL
             );
         """)
         
@@ -238,6 +226,10 @@ def _init_db():
             db.rollback()
         # Add columns for existing databases.
         try:
+            db.execute("ALTER TABLE opd_visits ADD COLUMN opd_id TEXT")
+        except Exception:
+            db.rollback()
+        try:
             db.execute("ALTER TABLE opd_visits ADD COLUMN panchakarma_notes TEXT DEFAULT ''")
         except Exception:
             db.rollback()
@@ -253,6 +245,10 @@ def _init_db():
             db.execute("ALTER TABLE opd_visits ADD COLUMN discount_type TEXT DEFAULT 'None'")
         except Exception:
             db.rollback()
+        db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_opd_visits_opd_id ON opd_visits (opd_id)
+            WHERE opd_id IS NOT NULL
+        """)
         db.execute("""
             CREATE TABLE IF NOT EXISTS appointments (
                 id          TEXT PRIMARY KEY,
@@ -270,12 +266,9 @@ def _init_db():
         db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id              SERIAL PRIMARY KEY,
-                clinic_id       TEXT NOT NULL REFERENCES clinics(id) ON DELETE CASCADE,
                 username        VARCHAR(50) UNIQUE NOT NULL,
                 password_hash   VARCHAR(255) NOT NULL,
                 email           VARCHAR(255) NOT NULL,
-                role            VARCHAR(20) DEFAULT 'Receptionist',
-                name            TEXT DEFAULT 'Doctor',
                 created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 reset_otp       VARCHAR(10),
                 otp_expiry      TIMESTAMP
@@ -291,10 +284,6 @@ def _init_db():
         except Exception:
             db.rollback()
         try:
-            db.execute("ALTER TABLE users ADD COLUMN role VARCHAR(20) DEFAULT 'Receptionist'")
-        except Exception:
-            db.rollback()
-        try:
             db.execute("ALTER TABLE users ADD COLUMN reset_otp VARCHAR(10)")
         except Exception:
             db.rollback()
@@ -307,18 +296,16 @@ def _init_db():
         db.execute("""
             CREATE TABLE IF NOT EXISTS calendar_notes (
                 id              SERIAL PRIMARY KEY,
-                clinic_id       TEXT NOT NULL REFERENCES clinics(id) ON DELETE CASCADE,
                 note_date       DATE NOT NULL,
                 note_text       TEXT,
                 created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at      TIMESTAMP,
-                UNIQUE (clinic_id, note_date)
+                UNIQUE (note_date)
             );
         """)
         db.execute("""
             CREATE TABLE IF NOT EXISTS clinic_settings (
                 id              SERIAL PRIMARY KEY,
-                clinic_id       TEXT NOT NULL REFERENCES clinics(id) ON DELETE CASCADE UNIQUE,
                 doctor_name     VARCHAR(255),
                 doctor_email    VARCHAR(255),
                 doctor_contact  VARCHAR(50),
@@ -341,23 +328,20 @@ def _init_db():
         db.execute("""
             CREATE TABLE IF NOT EXISTS medicines (
                 id              SERIAL PRIMARY KEY,
-                clinic_id       TEXT NOT NULL REFERENCES clinics(id) ON DELETE CASCADE,
                 name            VARCHAR(255) NOT NULL,
-                UNIQUE (clinic_id, name)
+                UNIQUE (name)
             );
         """)
         db.execute("""
             CREATE TABLE IF NOT EXISTS symptoms_master (
                 id              SERIAL PRIMARY KEY,
-                clinic_id       TEXT NOT NULL REFERENCES clinics(id) ON DELETE CASCADE,
                 name            TEXT NOT NULL,
-                UNIQUE (clinic_id, name)
+                UNIQUE (name)
             );
         """)
         db.execute("""
             CREATE TABLE IF NOT EXISTS sync_queue (
                 id              SERIAL PRIMARY KEY,
-                clinic_id       TEXT NOT NULL REFERENCES clinics(id) ON DELETE CASCADE,
                 entity_type     VARCHAR(20) NOT NULL,
                 entity_id       VARCHAR(100) NOT NULL,
                 status          VARCHAR(20) DEFAULT 'PENDING',
@@ -380,18 +364,15 @@ def _init_db():
         ).hexdigest()
         db.execute(
             """
-            INSERT INTO users (username, password_hash, clinic_id, email, name, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO users (username, password_hash, email, created_at)
+            VALUES (%s, %s, %s, %s)
             ON CONFLICT (username) DO UPDATE SET
-                password_hash = EXCLUDED.password_hash,
-                name = EXCLUDED.name
+                password_hash = EXCLUDED.password_hash
             """,
             (
                 DEFAULT_ADMIN_USERNAME,
                 default_admin_password_hash,
-                'CLI001',
                 'admin@medihive.local',
-                DEFAULT_ADMIN_NAME,
                 datetime.utcnow().isoformat(),
             ),
         )
@@ -492,7 +473,6 @@ def _init_db():
         db.execute("""
             CREATE TABLE IF NOT EXISTS patient_images (
                 id              SERIAL PRIMARY KEY,
-                clinic_id       TEXT NOT NULL REFERENCES clinics(id) ON DELETE CASCADE,
                 patient_id      TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
                 opd_visit_id    TEXT REFERENCES opd_visits(id) ON DELETE SET NULL,
                 file_path       VARCHAR(500) NOT NULL,
@@ -502,9 +482,6 @@ def _init_db():
                 created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 drive_url       TEXT DEFAULT NULL
             );
-        """)
-        db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_patient_images_clinic ON patient_images(clinic_id);
         """)
         db.execute("""
             CREATE INDEX IF NOT EXISTS idx_patient_images_patient ON patient_images(patient_id);

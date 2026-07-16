@@ -45,12 +45,12 @@ def _sync_opd_to_sheets(opd, image_links=None):
         db = get_db()
         db.execute("""
             INSERT INTO patients
-                (id, full_name, mobile_number, gender, created_at, updated_at, is_synced)
-            VALUES (%s, %s, %s, %s, %s, %s, 0)
+                (id, full_name, mobile_number, gender, created_at)
+            VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT DO NOTHING
         """, (
             patient_id, 'Unknown (Auto-created)',
-            '', 'Not Specified', now, now,
+            '', 'Not Specified', now,
         ))
         db.commit()
         db.close()
@@ -110,9 +110,9 @@ def pull():
     data = request.get_json() or {}
     last_sync = data.get('last_sync', '2000-01-01T00:00:00')
 
-    patients = Patient.updated_since(last_sync, user_id=user_id)
-    opd_records = OPDRecord.updated_since(last_sync, user_id=user_id)
-    appointments = Appointment.updated_since(last_sync, user_id=user_id)
+    patients = Patient.updated_since(last_sync)
+    opd_records = OPDRecord.updated_since(last_sync)
+    appointments = Appointment.updated_since(last_sync)
     deleted_entities = DeletedEntity.since(last_sync, user_id=user_id)
 
     db = get_db()
@@ -167,7 +167,6 @@ def push():
     temp_id_map = {}
 
     for p in data.get('patients', []):
-        p['user_id'] = user_id
         old_id = p.get('id', '')
         is_temp = old_id.startswith('TEMP_')
         if is_temp:
@@ -218,7 +217,6 @@ def push():
 
     sheet_errors = []
     for r in data.get('opd_records', []):
-        r['user_id'] = user_id
         pat_id = r.get('patient_id', '')
         if pat_id in temp_id_map:
             r['patient_id'] = temp_id_map[pat_id]
@@ -279,7 +277,6 @@ def push():
             logger.warning("Delete sync failed for %s %s: %s", etype, eid, exc)
 
     for a in data.get('appointments', []):
-        a['user_id'] = user_id
         results['appointments'].append(Appointment.upsert(a))
 
     response = {
@@ -397,8 +394,7 @@ def push_images(opd_id):
         }), 500
 
     urls_text = "\n".join(drive_urls)
-    OPDRecord.set_image_links(opd_id, urls_text)
-    logger.info("Image links persisted in DB for OPD %s: %s", opd_id, urls_text)
+    logger.info("Image links for OPD %s: %s", opd_id, urls_text)
 
     sheet_update_ok = True
     try:
@@ -455,7 +451,6 @@ def clear_all_data():
 
     try:
         from database import (
-            DEFAULT_ADMIN_NAME,
             DEFAULT_ADMIN_PASSWORD,
             DEFAULT_ADMIN_USERNAME,
             get_db,
@@ -477,15 +472,12 @@ def clear_all_data():
         # Re-create default user
         try:
             db.execute(
-                "INSERT INTO users (username, password_hash, email, role, name, created_at, clinic_id) VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (username) DO NOTHING",
+                "INSERT INTO users (username, password_hash, email, created_at) VALUES (%s, %s, %s, %s) ON CONFLICT (username) DO NOTHING",
                 (
                     DEFAULT_ADMIN_USERNAME,
                     default_admin_password_hash,
                     'admin@medihive.local',
-                    'Doctor',
-                    DEFAULT_ADMIN_NAME,
                     now,
-                    'CLI001',
                 )
             )
             db.commit()
