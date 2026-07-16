@@ -95,6 +95,12 @@ class DBConnection:
         except Exception:
             pass
 
+    def savepoint(self, name):
+        self._conn.cursor().execute(f"SAVEPOINT {name}")
+
+    def rollback_to_savepoint(self, name):
+        self._conn.cursor().execute(f"ROLLBACK TO SAVEPOINT {name}")
+
     def close(self):
         try:
             self._cursor.close()
@@ -167,25 +173,28 @@ def _init_db():
         # Migrations for patients schema renaming
         _last_sql = "ALTER TABLE patients RENAME COLUMN name TO full_name (migration)"
         logger.debug("INIT_DB SQL [02]: %s", _last_sql)
+        db.savepoint("sp_mig_02")
         try:
             db.execute("ALTER TABLE patients RENAME COLUMN name TO full_name")
         except Exception as e:
             logger.debug("INIT_DB SQL [02]: skipped — %s", e)
-            db.rollback()
+            db.rollback_to_savepoint("sp_mig_02")
         _last_sql = "ALTER TABLE patients RENAME COLUMN mobile TO mobile_number (migration)"
         logger.debug("INIT_DB SQL [03]: %s", _last_sql)
+        db.savepoint("sp_mig_03")
         try:
             db.execute("ALTER TABLE patients RENAME COLUMN mobile TO mobile_number")
         except Exception as e:
             logger.debug("INIT_DB SQL [03]: skipped — %s", e)
-            db.rollback()
+            db.rollback_to_savepoint("sp_mig_03")
         _last_sql = "ALTER TABLE patients ADD COLUMN alternate_mobile (migration)"
         logger.debug("INIT_DB SQL [04]: %s", _last_sql)
+        db.savepoint("sp_mig_04")
         try:
             db.execute("ALTER TABLE patients ADD COLUMN alternate_mobile TEXT DEFAULT ''")
         except Exception as e:
             logger.debug("INIT_DB SQL [04]: skipped — %s", e)
-            db.rollback()
+            db.rollback_to_savepoint("sp_mig_04")
 
         # --- [05] CREATE opd_visits ---
         _last_sql = "CREATE TABLE IF NOT EXISTS opd_visits"
@@ -219,83 +228,94 @@ def _init_db():
         # Rename opd_records → opd_visits for existing databases
         _last_sql = "ALTER TABLE opd_records RENAME TO opd_visits (migration)"
         logger.debug("INIT_DB SQL [06]: %s", _last_sql)
+        db.savepoint("sp_mig_06")
         try:
             db.execute("ALTER TABLE opd_records RENAME TO opd_visits")
         except Exception as e:
             logger.debug("INIT_DB SQL [06]: skipped — %s", e)
-            db.rollback()
+            db.rollback_to_savepoint("sp_mig_06")
         # Rename columns for existing databases
         _last_sql = "ALTER TABLE opd_visits RENAME COLUMN visit_date TO visit_datetime (migration)"
         logger.debug("INIT_DB SQL [07]: %s", _last_sql)
+        db.savepoint("sp_mig_07")
         try:
             db.execute("ALTER TABLE opd_visits RENAME COLUMN visit_date TO visit_datetime")
         except Exception as e:
             logger.debug("INIT_DB SQL [07]: skipped — %s", e)
-            db.rollback()
+            db.rollback_to_savepoint("sp_mig_07")
         _last_sql = "ALTER TABLE opd_visits RENAME COLUMN type TO opd_type (migration)"
         logger.debug("INIT_DB SQL [08]: %s", _last_sql)
+        db.savepoint("sp_mig_08")
         try:
             db.execute("ALTER TABLE opd_visits RENAME COLUMN type TO opd_type")
         except Exception as e:
             logger.debug("INIT_DB SQL [08]: skipped — %s", e)
-            db.rollback()
+            db.rollback_to_savepoint("sp_mig_08")
         _last_sql = "ALTER TABLE opd_visits RENAME COLUMN next_visit TO next_visit_date (migration)"
         logger.debug("INIT_DB SQL [09]: %s", _last_sql)
+        db.savepoint("sp_mig_09")
         try:
             db.execute("ALTER TABLE opd_visits RENAME COLUMN next_visit TO next_visit_date")
         except Exception as e:
             logger.debug("INIT_DB SQL [09]: skipped — %s", e)
-            db.rollback()
+            db.rollback_to_savepoint("sp_mig_09")
         _last_sql = "ALTER TABLE opd_visits RENAME COLUMN follow_up_reason TO followup_status (migration)"
         logger.debug("INIT_DB SQL [10]: %s", _last_sql)
+        db.savepoint("sp_mig_10")
         try:
             db.execute("ALTER TABLE opd_visits RENAME COLUMN follow_up_reason TO followup_status")
         except Exception as e:
             logger.debug("INIT_DB SQL [10]: skipped — %s", e)
-            db.rollback()
+            db.rollback_to_savepoint("sp_mig_10")
         _last_sql = "ALTER TABLE opd_visits RENAME COLUMN discount TO discount_value (migration)"
         logger.debug("INIT_DB SQL [11]: %s", _last_sql)
+        db.savepoint("sp_mig_11")
         try:
             db.execute("ALTER TABLE opd_visits RENAME COLUMN discount TO discount_value")
         except Exception as e:
             logger.debug("INIT_DB SQL [11]: skipped — %s", e)
-            db.rollback()
+            db.rollback_to_savepoint("sp_mig_11")
         # Add columns for existing databases.
         _last_sql = "ALTER TABLE opd_visits ADD COLUMN opd_id (migration)"
         logger.debug("INIT_DB SQL [12]: %s", _last_sql)
+        db.savepoint("sp_mig_12")
         try:
             db.execute("ALTER TABLE opd_visits ADD COLUMN opd_id TEXT")
         except Exception as e:
             logger.debug("INIT_DB SQL [12]: skipped — %s", e)
-            db.rollback()
+            db.rollback_to_savepoint("sp_mig_12")
         _last_sql = "ALTER TABLE opd_visits ADD COLUMN panchakarma_notes (migration)"
         logger.debug("INIT_DB SQL [13]: %s", _last_sql)
+        db.savepoint("sp_mig_13")
         try:
             db.execute("ALTER TABLE opd_visits ADD COLUMN panchakarma_notes TEXT DEFAULT ''")
         except Exception as e:
             logger.debug("INIT_DB SQL [13]: skipped — %s", e)
-            db.rollback()
+            db.rollback_to_savepoint("sp_mig_13")
         _last_sql = "ALTER TABLE opd_visits ADD COLUMN panchakarma_fee (migration)"
         logger.debug("INIT_DB SQL [14]: %s", _last_sql)
+        db.savepoint("sp_mig_14")
         try:
             db.execute("ALTER TABLE opd_visits ADD COLUMN panchakarma_fee TEXT DEFAULT '0'")
         except Exception as e:
             logger.debug("INIT_DB SQL [14]: skipped — %s", e)
-            db.rollback()
+            db.rollback_to_savepoint("sp_mig_14")
         _last_sql = "ALTER TABLE opd_visits ADD COLUMN total_fee (migration)"
         logger.debug("INIT_DB SQL [15]: %s", _last_sql)
+        db.savepoint("sp_mig_15")
         try:
             db.execute("ALTER TABLE opd_visits ADD COLUMN total_fee TEXT DEFAULT '0'")
         except Exception as e:
             logger.debug("INIT_DB SQL [15]: skipped — %s", e)
-            db.rollback()
+            db.rollback_to_savepoint("sp_mig_15")
         _last_sql = "ALTER TABLE opd_visits ADD COLUMN discount_type (migration)"
         logger.debug("INIT_DB SQL [16]: %s", _last_sql)
+        db.savepoint("sp_mig_16")
         try:
             db.execute("ALTER TABLE opd_visits ADD COLUMN discount_type TEXT DEFAULT 'None'")
         except Exception as e:
             logger.debug("INIT_DB SQL [16]: skipped — %s", e)
-            db.rollback()
+            db.rollback_to_savepoint("sp_mig_16")
 
         # --- [17] CREATE INDEX ix_opd_visits_opd_id ---
         _last_sql = "CREATE UNIQUE INDEX IF NOT EXISTS ix_opd_visits_opd_id"
@@ -340,32 +360,36 @@ def _init_db():
         # Migrations for users schema update
         _last_sql = "ALTER TABLE users RENAME COLUMN password TO password_hash (migration)"
         logger.debug("INIT_DB SQL [20]: %s", _last_sql)
+        db.savepoint("sp_mig_20")
         try:
             db.execute("ALTER TABLE users RENAME COLUMN password TO password_hash")
         except Exception as e:
             logger.debug("INIT_DB SQL [20]: skipped — %s", e)
-            db.rollback()
+            db.rollback_to_savepoint("sp_mig_20")
         _last_sql = "ALTER TABLE users ADD COLUMN email (migration)"
         logger.debug("INIT_DB SQL [21]: %s", _last_sql)
+        db.savepoint("sp_mig_21")
         try:
             db.execute("ALTER TABLE users ADD COLUMN email VARCHAR(255) DEFAULT ''")
         except Exception as e:
             logger.debug("INIT_DB SQL [21]: skipped — %s", e)
-            db.rollback()
+            db.rollback_to_savepoint("sp_mig_21")
         _last_sql = "ALTER TABLE users ADD COLUMN reset_otp (migration)"
         logger.debug("INIT_DB SQL [22]: %s", _last_sql)
+        db.savepoint("sp_mig_22")
         try:
             db.execute("ALTER TABLE users ADD COLUMN reset_otp VARCHAR(10)")
         except Exception as e:
             logger.debug("INIT_DB SQL [22]: skipped — %s", e)
-            db.rollback()
+            db.rollback_to_savepoint("sp_mig_22")
         _last_sql = "ALTER TABLE users ADD COLUMN otp_expiry (migration)"
         logger.debug("INIT_DB SQL [23]: %s", _last_sql)
+        db.savepoint("sp_mig_23")
         try:
             db.execute("ALTER TABLE users ADD COLUMN otp_expiry TIMESTAMP")
         except Exception as e:
             logger.debug("INIT_DB SQL [23]: skipped — %s", e)
-            db.rollback()
+            db.rollback_to_savepoint("sp_mig_23")
 
         # Create missing master/support tables
         # --- [24] CREATE calendar_notes ---
