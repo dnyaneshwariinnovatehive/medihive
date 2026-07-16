@@ -175,6 +175,9 @@ def initialize_google_services():
 
 app = create_app()
 
+from database import init_db
+init_db()
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(
