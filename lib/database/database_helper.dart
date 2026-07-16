@@ -248,6 +248,43 @@ class DatabaseHelper {
         } catch (_) {}
         debugPrint('Applied migration v10: updated schemas for calendar_notes, clinic_settings, medicines, symptoms_master, sync_queue, users');
         break;
+      case 11:
+        try {
+          await db.execute("ALTER TABLE patients ADD COLUMN updated_at DATETIME");
+        } catch (_) {}
+        try {
+          await db.execute("ALTER TABLE opd_visits ADD COLUMN updated_at DATETIME");
+        } catch (_) {}
+        try {
+          await db.execute("ALTER TABLE patients ADD COLUMN sync_id TEXT");
+        } catch (_) {}
+        debugPrint('Applied migration v11: added updated_at/sync_id columns to match manager schema');
+        break;
+      case 12:
+        // Ensure all core tables exist (from manager schema)
+        try { await db.execute(createPatientsTable); } catch (_) {}
+        try { await db.execute(createOpdVisitsTable); } catch (_) {}
+        try { await db.execute(createCalendarNotesTable); } catch (_) {}
+        try { await db.execute(createClinicSettingsTable); } catch (_) {}
+        try { await db.execute(createUsersTable); } catch (_) {}
+        try { await db.execute(createMedicinesTable); } catch (_) {}
+        try { await db.execute(createSymptomsMasterTable); } catch (_) {}
+        try { await db.execute(createPatientImagesTable); } catch (_) {}
+        try { await db.execute(createSyncQueueTable); } catch (_) {}
+        try { await db.execute(createCloudSyncQueueTable); } catch (_) {}
+        try { await db.execute(createDeviceRegistrationTable); } catch (_) {}
+        try { await db.execute(createixPatientsId); } catch (_) {}
+        try { await db.execute(createixPatientsSyncId); } catch (_) {}
+        try { await db.execute(createixOpdVisitsId); } catch (_) {}
+        try { await db.execute(createixOpdVisitsOpdId); } catch (_) {}
+        try { await db.execute(createixPatientImagesId); } catch (_) {}
+        try { await db.execute(createixSyncQueueId); } catch (_) {}
+        try { await db.execute(createixUsersId); } catch (_) {}
+        try { await db.execute(createixClinicSettingsId); } catch (_) {}
+        try { await db.execute(createixCloudSyncQueueStatus); } catch (_) {}
+        try { await db.execute(createixDeviceRegistrationDeviceId); } catch (_) {}
+        debugPrint('Applied migration v12: ensured all core tables and indexes exist');
+        break;
       default:
         debugPrint('No migration defined for version $targetVersion');
     }

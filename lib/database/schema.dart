@@ -1,4 +1,4 @@
-const int databaseVersion = 10;
+const int databaseVersion = 12;
 
 const String tablePatients = 'patients';
 const String tableOpdVisits = 'opd_visits';
