@@ -80,7 +80,6 @@ class Patient:
 
     @staticmethod
     def delete(patient_id):
-        from models.deleted_entity import DeletedEntity
         from models.opd_record import OPDRecord
         db = get_db()
         opd_rows = db.execute(
@@ -89,7 +88,6 @@ class Patient:
         db.close()
         for row in opd_rows:
             OPDRecord.delete(row['id'])
-        DeletedEntity.record('patient', patient_id)
         db = get_db()
         db.execute("DELETE FROM patients WHERE id = %s", (patient_id,))
         db.commit()

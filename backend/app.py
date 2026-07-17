@@ -8,11 +8,9 @@ from services.log_service import get_logger
 from routes.auth import auth_bp
 from routes.patients import patients_bp
 from routes.opd import opd_bp
-from routes.appointments import appointments_bp
 from routes.sync import sync_bp
-from routes.fcm import fcm_bp
 from routes.whatsapp import whatsapp_bp
-from routes.cloud import cloud_bp, sync_cloud_bp, device_bp
+from routes.cloud import cloud_bp, sync_cloud_bp
 
 logger = get_logger(__name__)
 
@@ -30,13 +28,10 @@ def create_app():
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(patients_bp, url_prefix='/api/patients')
     app.register_blueprint(opd_bp, url_prefix='/api/opd')
-    app.register_blueprint(appointments_bp, url_prefix='/api/appointments')
     app.register_blueprint(sync_bp, url_prefix='/api/sync')
-    app.register_blueprint(fcm_bp, url_prefix='/api/fcm')
     app.register_blueprint(whatsapp_bp, url_prefix='/api/whatsapp')
     app.register_blueprint(cloud_bp, url_prefix='/api/cloud')
     app.register_blueprint(sync_cloud_bp, url_prefix='/api/sync')
-    app.register_blueprint(device_bp, url_prefix='/api/device')
 
     @app.route('/api/health', methods=['GET'])
     def health():

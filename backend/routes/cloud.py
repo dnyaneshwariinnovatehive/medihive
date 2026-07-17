@@ -2,10 +2,6 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models.patient import Patient
 from models.opd_record import OPDRecord
-from models.appointment import Appointment
-from models.deleted_entity import DeletedEntity
-from models.clinic import Clinic
-from models.device_registry import DeviceRegistry
 from database import get_db
 from datetime import datetime
 from services.log_service import get_logger
@@ -13,17 +9,6 @@ from services.log_service import get_logger
 logger = get_logger(__name__)
 
 cloud_bp = Blueprint('cloud', __name__)
-
-
-def _validate_device(device_id, clinic_id):
-    if not device_id or not clinic_id:
-        return False
-    device = DeviceRegistry.get(device_id)
-    if not device:
-        return False
-    if device.get('clinic_id') != clinic_id:
-        return False
-    return True
 
 
 def _sync_opd_to_google_sheets(opd):
@@ -38,34 +23,11 @@ def _sync_opd_to_google_sheets(opd):
         logger.warning("Google Sheets sync error for OPD %s: %s", opd.get('id'), e)
 
 
-@cloud_bp.route('/register-device', methods=['POST'])
-def register_device():
-    """
-    Register or update a device for cloud sync.
-    Links the device to a clinic so data can be routed correctly.
-    No JWT required — device identifies itself via device_id + clinic_id.
-    """
-    data = request.get_json() or {}
-    device_id = data.get('device_id', '').strip()
-    if not device_id:
-        return jsonify({'error': 'device_id is required'}), 400
-
-    device = DeviceRegistry.register({
-        'device_id': device_id,
-        'device_name': data.get('device_name', ''),
-        'clinic_id': data.get('clinic_id', ''),
-        'fcm_token': data.get('fcm_token', ''),
-        'app_version': data.get('app_version', ''),
-    })
-    logger.info("Device registered: %s for clinic %s", device_id, data.get('clinic_id', ''))
-    return jsonify({'device': device, 'message': 'Device registered'}), 200
-
-
 @cloud_bp.route('/upload-changes', methods=['POST'])
 def upload_changes():
     """
     Receive local changes from a device and upsert them into the cloud DB.
-    Authenticated via device_id + clinic_id (no JWT required).
+    Authenticated via clinic_id (no JWT required).
     After storage, syncs OPD records to Google Sheets when credentials exist.
     """
     data = request.get_json() or {}
@@ -75,21 +37,17 @@ def upload_changes():
     if not clinic_id:
         return jsonify({'error': 'clinic_id is required'}), 400
 
-    if not _validate_device(device_id, clinic_id):
-        return jsonify({'error': 'Invalid device or clinic'}), 401
-
     logger.info(
         "CLOUD DEVICE DEBUG: upload clinic_id=%s device_id=%s",
         clinic_id, device_id,
     )
     logger.info(
-        "CLOUD DEVICE DEBUG: upload patients=%d opd=%d appts=%d",
+        "CLOUD DEVICE DEBUG: upload patients=%d opd=%d",
         len(data.get('patients', [])),
         len(data.get('opd_records', [])),
-        len(data.get('appointments', [])),
     )
 
-    results = {'patients': [], 'opd_records': [], 'appointments': []}
+    results = {'patients': [], 'opd_records': []}
     temp_id_map = {}
 
     for p in data.get('patients', []):
@@ -111,27 +69,10 @@ def upload_changes():
         result = OPDRecord.upsert(r)
         results['opd_records'].append(result)
         logger.info("CLOUD DEVICE DEBUG: stored opd id=%s", r['id'])
-        # Sync to Google Sheets from any network
         _sync_opd_to_google_sheets(r)
 
-    for a in data.get('appointments', []):
-        results['appointments'].append(Appointment.upsert(a))
-
-    for entry in data.get('deleted_entities', []):
-        etype = entry.get('entity_type')
-        eid = entry.get('entity_id')
-        DeletedEntity.record(etype, eid, user_id=device_id, clinic_id=clinic_id)
-
-    _log_sync(
-        clinic_id, 'upload', device_id=device_id,
-        patients=len(results['patients']),
-        opd=len(results['opd_records']),
-        appts=len(results['appointments']),
-        deleted=len(data.get('deleted_entities', [])),
-    )
-
-    logger.info("CLOUD DEVICE DEBUG: stored patients=%d opd_records=%d appts=%d",
-                len(results['patients']), len(results['opd_records']), len(results['appointments']))
+    logger.info("CLOUD DEVICE DEBUG: stored patients=%d opd_records=%d",
+                len(results['patients']), len(results['opd_records']))
 
     response = {
         'results': results,
@@ -146,7 +87,7 @@ def upload_changes():
 def download_changes():
     """
     Return all records updated since the given timestamp for the specified clinic.
-    Authenticated via device_id + clinic_id (no JWT required).
+    Authenticated via clinic_id (no JWT required).
     """
     data = request.get_json() or {}
     clinic_id = data.get('clinic_id', '')
@@ -156,21 +97,16 @@ def download_changes():
     if not clinic_id:
         return jsonify({'error': 'clinic_id is required'}), 400
 
-    if not _validate_device(device_id, clinic_id):
-        return jsonify({'error': 'Invalid device or clinic'}), 401
-
     patients = Patient.updated_since(last_sync)
     opd_records = OPDRecord.updated_since(last_sync)
-    appointments = Appointment.updated_since(last_sync)
-    deleted_entities = DeletedEntity.since(last_sync, clinic_id=clinic_id)
 
     logger.info(
         "CLOUD DEVICE DEBUG: download clinic_id=%s device_id=%s last_sync=%s",
         clinic_id, device_id, last_sync,
     )
     logger.info(
-        "CLOUD DEVICE DEBUG: returned patients=%d opd=%d appts=%d deleted=%d",
-        len(patients), len(opd_records), len(appointments), len(deleted_entities),
+        "CLOUD DEVICE DEBUG: returned patients=%d opd=%d",
+        len(patients), len(opd_records),
     )
     for p in patients[:3]:
         logger.info("CLOUD DEVICE DEBUG: patient id=%s name=%s updated_at=%s",
@@ -182,24 +118,8 @@ def download_changes():
     return jsonify({
         'patients': patients,
         'opd_records': opd_records,
-        'appointments': appointments,
-        'deleted_entities': deleted_entities,
         'server_time': datetime.utcnow().isoformat(),
     }), 200
-
-
-@cloud_bp.route('/heartbeat', methods=['POST'])
-def heartbeat():
-    """
-    Update the device's last_seen timestamp.
-    Called periodically by devices to indicate they are active.
-    No JWT required — device identifies itself via device_id.
-    """
-    data = request.get_json() or {}
-    device_id = data.get('device_id', '')
-    if device_id:
-        DeviceRegistry.update_heartbeat(device_id)
-    return jsonify({'message': 'ok'}), 200
 
 
 @cloud_bp.route('/upload-images/<opd_id>', methods=['POST'])
@@ -292,25 +212,6 @@ def cloud_upload_images(opd_id):
         return jsonify(response), 207
 
 
-@cloud_bp.route('/clinic-info', methods=['GET'])
-@jwt_required()
-def clinic_info():
-    return jsonify({'error': 'Clinic info not available without clinic_id column'}), 400
-
-
-# ─── Cloud Sync Log Helper ────────────────────────────
-
-def _log_sync(clinic_id, direction, device_id='', patients=0, opd=0, appts=0, deleted=0, status='success', error=''):
-    db = get_db()
-    now = datetime.utcnow().isoformat()
-    db.execute(
-        "INSERT INTO cloud_sync_log (clinic_id, device_id, direction, patients_count, opd_count, appointments_count, deleted_count, status, error_message, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (clinic_id, device_id, direction, patients, opd, appts, deleted, status, error, now)
-    )
-    db.commit()
-    db.close()
-
-
 # ─── New Cloud Sync Blueprint (registered at /api/sync) ──
 
 sync_cloud_bp = Blueprint('sync_cloud', __name__)
@@ -325,15 +226,12 @@ def sync_cloud_upload():
     if not clinic_id:
         return jsonify({'error': 'clinic_id is required'}), 400
 
-    if not _validate_device(device_id, clinic_id):
-        return jsonify({'error': 'Invalid device or clinic'}), 401
-
     logger.info(
         "Cloud upload from device=%s clinic=%s",
         device_id, clinic_id,
     )
 
-    results = {'patients': [], 'opd_records': [], 'appointments': []}
+    results = {'patients': [], 'opd_records': []}
     temp_id_map = {}
 
     for p in data.get('patients', []):
@@ -353,30 +251,11 @@ def sync_cloud_upload():
         results['opd_records'].append(result)
         _sync_opd_to_google_sheets(r)
 
-    for a in data.get('appointments', []):
-        results['appointments'].append(Appointment.upsert(a))
-
-    deleted_count = 0
-    for entry in data.get('deleted_entities', []):
-        etype = entry.get('entity_type')
-        eid = entry.get('entity_id')
-        DeletedEntity.record(etype, eid, user_id=device_id, clinic_id=clinic_id)
-        deleted_count += 1
-
-    _log_sync(
-        clinic_id, 'upload', device_id=device_id,
-        patients=len(results['patients']),
-        opd=len(results['opd_records']),
-        appts=len(results['appointments']),
-        deleted=deleted_count,
-    )
-
     logger.info(
-        "Cloud upload complete for clinic=%s: %d patients, %d OPDs, %d appts",
+        "Cloud upload complete for clinic=%s: %d patients, %d OPDs",
         clinic_id,
         len(results['patients']),
         len(results['opd_records']),
-        len(results['appointments']),
     )
 
     response = {
@@ -397,34 +276,19 @@ def sync_cloud_download():
     if not clinic_id:
         return jsonify({'error': 'clinic_id is required'}), 400
 
-    if not _validate_device(device_id, clinic_id):
-        return jsonify({'error': 'Invalid device or clinic'}), 401
-
     logger.info("Cloud download for clinic=%s last_sync=%s", clinic_id, last_sync)
 
     patients = Patient.updated_since(last_sync)
     opd_records = OPDRecord.updated_since(last_sync)
-    appointments = Appointment.updated_since(last_sync)
-    deleted_entities = DeletedEntity.since(last_sync, clinic_id=clinic_id)
-
-    _log_sync(
-        clinic_id, 'download',
-        patients=len(patients),
-        opd=len(opd_records),
-        appts=len(appointments),
-        deleted=len(deleted_entities),
-    )
 
     logger.info(
-        "Cloud download returned patients=%d opd=%d appts=%d deleted=%d",
-        len(patients), len(opd_records), len(appointments), len(deleted_entities),
+        "Cloud download returned patients=%d opd=%d",
+        len(patients), len(opd_records),
     )
 
     return jsonify({
         'patients': patients,
         'opd_records': opd_records,
-        'appointments': appointments,
-        'deleted_entities': deleted_entities,
         'server_time': datetime.utcnow().isoformat(),
     }), 200
 
@@ -435,28 +299,4 @@ def sync_cloud_ack():
     clinic_id = data.get('clinic_id', '')
     device_id = data.get('device_id', '')
     logger.info("Cloud ack from device=%s clinic=%s", device_id, clinic_id)
-    _log_sync(clinic_id, 'ack', device_id=device_id, status='acknowledged')
     return jsonify({'message': 'acknowledged', 'server_time': datetime.utcnow().isoformat()}), 200
-
-
-# ─── Device Registration Blueprint (registered at /api/device) ──
-
-device_bp = Blueprint('device', __name__)
-
-
-@device_bp.route('/register', methods=['POST'])
-def register_device_v2():
-    data = request.get_json() or {}
-    device_id = data.get('device_id', '').strip()
-    if not device_id:
-        return jsonify({'error': 'device_id is required'}), 400
-
-    device = DeviceRegistry.register({
-        'device_id': device_id,
-        'device_name': data.get('device_name', ''),
-        'clinic_id': data.get('clinic_id', ''),
-        'fcm_token': data.get('fcm_token', ''),
-        'app_version': data.get('app_version', ''),
-    })
-    logger.info("Device registered: %s for clinic %s", device_id, data.get('clinic_id', ''))
-    return jsonify({'device': device, 'message': 'Device registered'}), 200

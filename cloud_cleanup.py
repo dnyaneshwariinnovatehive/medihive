@@ -5,23 +5,14 @@ Deletes all cloud sync data from the backend SQLite database.
 
 SAFE items (NOT deleted):
   - users table (admin accounts)
-  - clinics table (clinic configuration)
-  - settings table (app settings)
-  - fcm_tokens table (push notification tokens)
+  - clinic_settings table (clinic configuration)
+  - medicines, symptoms_master (master data)
+  - calendar_notes, sync_queue, patient_images
   - sqlite_sequence (auto-increment counters)
-  - Google Sheet ID, Drive folder ID config
-  - Google API credentials (credentials.json, drive_token.json)
-  - Local Flutter SQLite database
-  - Sync logic code
 
 DELETED items:
   - patients table (all rows)
-  - opd_records table (all rows)
-  - appointments table (all rows)
-  - deleted_entities table (all rows)
-  - device_registry table (all registered devices)
-  - cloud_sync_log table (all sync history)
-  - last_sync table (sync timestamps)
+  - opd_visits table (all rows)
 """
 
 import sqlite3
@@ -32,19 +23,17 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backend', 'm
 
 TABLES_TO_CLEAR = [
     'patients',
-    'opd_records',
-    'appointments',
-    'deleted_entities',
-    'device_registry',
-    'cloud_sync_log',
-    'last_sync',
+    'opd_visits',
 ]
 
 TABLES_TO_PRESERVE = [
     'users',
-    'clinics',
-    'settings',
-    'fcm_tokens',
+    'clinic_settings',
+    'medicines',
+    'symptoms_master',
+    'calendar_notes',
+    'sync_queue',
+    'patient_images',
 ]
 
 
@@ -112,12 +101,6 @@ def run():
     print("\n" + "=" * 70)
     print("  CLEANUP COMPLETE")
     print("=" * 70)
-    print("\nNext steps:")
-    print("  1. Clear Google Sheet data rows (keep header)")
-    print("  2. Delete test images from Google Drive folder")
-    print("  3. Clear local Flutter cloud_sync_queue + device_registration tables")
-    print("  4. Delete last_cloud_sync from SharedPreferences on each device")
-    print("  5. Restart both devices to re-register")
 
 
 if __name__ == '__main__':

@@ -2,8 +2,6 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models.patient import Patient
 from models.opd_record import OPDRecord
-from models.appointment import Appointment
-from models.deleted_entity import DeletedEntity
 from database import get_db
 from datetime import datetime
 from pathlib import Path
@@ -112,32 +110,10 @@ def pull():
 
     patients = Patient.updated_since(last_sync)
     opd_records = OPDRecord.updated_since(last_sync)
-    appointments = Appointment.updated_since(last_sync)
-    deleted_entities = DeletedEntity.since(last_sync, user_id=user_id)
-
-    db = get_db()
-    now = datetime.utcnow().isoformat()
-    existing = db.execute(
-        "SELECT id FROM last_sync WHERE user_id = %s", (user_id,)
-    ).fetchone()
-    if existing:
-        db.execute(
-            "UPDATE last_sync SET last_sync = %s, updated_at = %s WHERE user_id = %s",
-            (last_sync, now, user_id)
-        )
-    else:
-        db.execute(
-            "INSERT INTO last_sync (user_id, last_sync, created_at, updated_at) VALUES (%s, %s, %s, %s)",
-            (user_id, last_sync, now, now)
-        )
-    db.commit()
-    db.close()
 
     return jsonify({
         'patients': patients,
         'opd_records': opd_records,
-        'appointments': appointments,
-        'deleted_entities': deleted_entities,
         'server_time': datetime.utcnow().isoformat(),
     }), 200
 
@@ -152,18 +128,17 @@ def push():
     user_id = get_jwt_identity()
     data = request.get_json() or {}
     logger.info(
-        "PUSH request from user=%s ip=%s patients=%d opd_records=%d appointments=%d",
+        "PUSH request from user=%s ip=%s patients=%d opd_records=%d",
         user_id, request.remote_addr,
         len(data.get('patients', [])),
         len(data.get('opd_records', [])),
-        len(data.get('appointments', [])),
     )
     if data.get('opd_records'):
         for r in data['opd_records']:
             logger.info("PUSH OPD: id=%s patient_id=%s visit_datetime=%s",
                         r.get('id'), r.get('patient_id'), r.get('visit_datetime'))
 
-    results = {'patients': [], 'opd_records': [], 'appointments': []}
+    results = {'patients': [], 'opd_records': []}
     temp_id_map = {}
 
     for p in data.get('patients', []):
@@ -259,7 +234,6 @@ def push():
 
     deleted_patients_confirmed = []
     deleted_opd_confirmed = []
-    deleted_appts_confirmed = []
     for entry in data.get('deleted_entities', []):
         etype = entry.get('entity_type')
         eid = entry.get('entity_id')
@@ -270,14 +244,8 @@ def push():
             elif etype == 'opd_visit':
                 OPDRecord.delete(eid)
                 deleted_opd_confirmed.append(eid)
-            elif etype == 'appointment':
-                Appointment.delete(eid)
-                deleted_appts_confirmed.append(eid)
         except Exception as exc:
             logger.warning("Delete sync failed for %s %s: %s", etype, eid, exc)
-
-    for a in data.get('appointments', []):
-        results['appointments'].append(Appointment.upsert(a))
 
     response = {
         'results': results,
@@ -285,11 +253,10 @@ def push():
     }
     if temp_id_map:
         response['temp_ids_mapped'] = temp_id_map
-    if deleted_patients_confirmed or deleted_opd_confirmed or deleted_appts_confirmed:
+    if deleted_patients_confirmed or deleted_opd_confirmed:
         response['deleted_confirmed'] = {
             'patients': deleted_patients_confirmed,
             'opd_records': deleted_opd_confirmed,
-            'appointments': deleted_appts_confirmed,
         }
     if sheet_errors:
         response['sheet_warnings'] = sheet_errors

@@ -84,8 +84,6 @@ class OPDRecord:
 
     @staticmethod
     def delete(record_id):
-        from models.deleted_entity import DeletedEntity
-        DeletedEntity.record('opd_visit', record_id)
         db = get_db()
         db.execute("DELETE FROM opd_visits WHERE id = %s", (record_id,))
         db.commit()

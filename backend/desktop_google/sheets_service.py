@@ -103,36 +103,13 @@ def _build_row(data: dict) -> list:
 # SHEET ID PERSISTENCE (SQLite + file fallback)
 # ─────────────────────────────────────────────
 def _load_sheet_id_from_db():
-    """Load the spreadsheet ID from the settings table."""
-    try:
-        db = get_db()
-        row = db.execute(
-            "SELECT value FROM settings WHERE key = 'spreadsheet_id'"
-        ).fetchone()
-        db.close()
-        if row and row['value']:
-            sid = row['value']
-            logger.info("Loaded sheet ID from database: %s", sid)
-            return sid
-    except Exception as e:
-        logger.warning("Could not load sheet ID from database: %s", e)
+    """Load the spreadsheet ID from the database. Returns None (settings table removed)."""
     return None
 
 
 def _save_sheet_id_to_db(spreadsheet_id):
-    """Persist the spreadsheet ID in the settings table."""
-    try:
-        db = get_db()
-        db.execute(
-            "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-            ('spreadsheet_id', spreadsheet_id)
-        )
-        db.commit()
-        db.close()
-        logger.info("Persisted sheet ID to database: %s", spreadsheet_id)
-        return True
-    except Exception as e:
-        logger.warning("Could not save sheet ID to database: %s", e)
+    """Persist the spreadsheet ID. No-op (settings table removed)."""
+    logger.debug("Sheet ID persistence skipped (settings table removed)")
     return False
 
 
@@ -652,12 +629,9 @@ def clear_opd_sheet_data():
         db = get_db()
         db.execute("DELETE FROM opd_visits")
         db.execute("DELETE FROM patients")
-        db.execute("DELETE FROM deleted_entities")
-        db.execute("DELETE FROM last_sync")
-        db.execute("DELETE FROM settings WHERE key = 'spreadsheet_id'")
         db.commit()
         db.close()
-        logger.info("Backend database cleared (opd_visits, patients, deleted_entities, last_sync)")
+        logger.info("Backend database cleared (opd_visits, patients)")
     except Exception as e:
         logger.error("Failed to clear backend database: %s", e)
 
