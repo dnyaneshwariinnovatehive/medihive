@@ -188,10 +188,14 @@ class CloudSyncManager extends ChangeNotifier {
     try {
       final allOpd = await _opdRepo.getAll();
       for (final row in allOpd) {
-        opdRecords.add(await _opdRowToMap(row));
+        try {
+          opdRecords.add(await _opdRowToMap(row));
+        } catch (e) {
+          debugPrint('CLOUD UPLOAD: error mapping OPD row: $e');
+        }
       }
     } catch (e) {
-      debugPrint('CLOUD UPLOAD: error building opd records: $e');
+      debugPrint('CLOUD UPLOAD: error reading opd records: $e');
     }
 
     try {
@@ -534,11 +538,11 @@ class CloudSyncManager extends ChangeNotifier {
       'visit_datetime': DateTime.tryParse(visitDt)?.toIso8601String() ?? createdDt.toIso8601String(),
       'clinical_notes': row['clinical_notes'] ?? '',
       'panchakarma_notes': pkNotes,
-      'consultation_fee': (row['consultation_fee'] as num?)?.toString() ?? '',
-      'medicine_fee': (row['medicine_fee'] as num?)?.toString() ?? '',
-      'panchakarma_fee': (row['panchakarma_fee'] as num?)?.toString() ?? '',
-      'total_fee': (row['total_fee'] as num?)?.toString() ?? '',
-      'discount_value': (row['discount_value'] as num?)?.toString() ?? '',
+      'consultation_fee': row['consultation_fee']?.toString() ?? '',
+      'medicine_fee': row['medicine_fee']?.toString() ?? '',
+      'panchakarma_fee': row['panchakarma_fee']?.toString() ?? '',
+      'total_fee': row['total_fee']?.toString() ?? '',
+      'discount_value': row['discount_value']?.toString() ?? '',
       'discount_type': row['discount_type'] ?? '',
       'payment_mode': row['payment_mode'] ?? '',
       'charge_type': row['charge_type'] ?? '',
