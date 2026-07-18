@@ -7,6 +7,7 @@ import 'package:hive/hive.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../repositories/patient_repository.dart';
 import '../repositories/opd_record_repository.dart';
+import '../utils/helpers.dart';
 
 class ImportResult {
   final int patientsImported;
@@ -64,10 +65,10 @@ class ImportService {
           orElse: () => null,
         );
 
-        final desktopId = row['id'] as int;
+        final desktopId = Helpers.toInt(row['id']);
 
         if (existing != null && !overwrite) {
-          patientIdMap[desktopId] = existing['id'] as int;
+          patientIdMap[desktopId] = Helpers.toInt(existing['id']);
           patientsSkipped++;
           continue;
         }
@@ -99,8 +100,8 @@ class ImportService {
       final opdRows = await db.rawQuery('SELECT * FROM opd_visits ORDER BY id');
       for (final row in opdRows) {
         final opdId = (row['opd_id'] as String?)?.trim() ?? '';
-        final patientId = row['patient_id'] as int?;
-        if (opdId.isEmpty || patientId == null) continue;
+        final patientId = Helpers.toInt(row['patient_id']);
+        if (opdId.isEmpty || patientId == 0) continue;
 
         final mappedPatientId = patientIdMap[patientId] ?? patientId;
 
@@ -135,7 +136,7 @@ class ImportService {
         };
 
         if (existing != null) {
-          await opdRepo.update(existing['id'] as int, opdRow);
+          await opdRepo.update(Helpers.toInt(existing['id']), opdRow);
         } else {
           await opdRepo.insert(opdRow);
         }

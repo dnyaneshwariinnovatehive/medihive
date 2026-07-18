@@ -73,7 +73,7 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
       return;
     }
 
-    final sqliteId = patientRow['id'] as int;
+    final sqliteId = Helpers.toInt(patientRow['id']);
     final displayId = (patientRow['sync_id'] as String?)?.isNotEmpty == true
         ? patientRow['sync_id'] as String
         : 'P${sqliteId.toString().padLeft(3, '0')}';
@@ -175,7 +175,7 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
     final localRow = await opdRepo.getByOpdId(opdId);
     if (localRow == null) return;
 
-    final localId = localRow['id'] as int;
+    final localId = Helpers.toInt(localRow['id']);
 
     // Clean up images
     final imagesRepo = PatientImagesRepository();

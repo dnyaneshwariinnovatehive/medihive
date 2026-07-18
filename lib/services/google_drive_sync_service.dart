@@ -15,6 +15,7 @@ import '../models/appointment_model.dart';
 import '../repositories/patient_repository.dart';
 import '../repositories/opd_record_repository.dart';
 import '../repositories/sync_queue_repository.dart';
+import '../utils/helpers.dart';
 
 // ────────────────────────────────────────────────────────────────
 // ⚠ PERMANENT LOCK: This service MUST NEVER be called during
@@ -257,7 +258,7 @@ class GoogleDriveSyncService {
         if (entry['entity_type'] == 'patient' ||
             entry['entity_type'] == 'opd_visit') {
           await syncRepo.update(
-            entry['id'] as int,
+            Helpers.toInt(entry['id']),
             {'status': 'synced', 'last_attempt': DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now())},
           );
         }

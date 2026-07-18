@@ -9,13 +9,10 @@ const String tableMedicines = 'medicines';
 const String tableSymptomsMaster = 'symptoms_master';
 const String tablePatientImages = 'patient_images';
 const String tableSyncQueue = 'sync_queue';
-const String tableCloudSyncQueue = 'cloud_sync_queue';
-const String tableDeviceRegistration = 'device_registration';
 
 String get createPatientsTable => '''
   CREATE TABLE $tablePatients (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    clinic_id TEXT,
     full_name VARCHAR(255) NOT NULL,
     mobile_number VARCHAR(20) NOT NULL,
     alternate_mobile VARCHAR(20),
@@ -25,7 +22,6 @@ String get createPatientsTable => '''
     blood_group VARCHAR(10),
     address VARCHAR(500),
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME,
     sync_id TEXT
   )
 ''';
@@ -35,19 +31,18 @@ String get createOpdVisitsTable => '''
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     opd_id VARCHAR NOT NULL,
     patient_id INTEGER NOT NULL,
-    clinic_id INTEGER,
     visit_datetime DATETIME NOT NULL,
     opd_type VARCHAR,
     charge_type VARCHAR,
     diagnosis VARCHAR,
     symptoms VARCHAR,
     clinical_notes VARCHAR,
-    consultation_fee FLOAT,
-    medicine_fee FLOAT,
-    panchakarma_fee FLOAT,
-    total_fee FLOAT,
+    consultation_fee TEXT,
+    medicine_fee TEXT,
+    panchakarma_fee TEXT,
+    total_fee TEXT,
     discount_type VARCHAR,
-    discount_value FLOAT,
+    discount_value TEXT,
     payment_mode VARCHAR,
     next_visit_date DATE,
     followup_status VARCHAR,
@@ -61,7 +56,6 @@ String get createOpdVisitsTable => '''
 String get createCalendarNotesTable => '''
   CREATE TABLE $tableCalendarNotes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    clinic_id TEXT,
     note_date DATE NOT NULL,
     note_text TEXT,
     created_at DATETIME,
@@ -73,7 +67,6 @@ String get createCalendarNotesTable => '''
 String get createClinicSettingsTable => '''
   CREATE TABLE $tableClinicSettings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    clinic_id TEXT,
     doctor_name VARCHAR(255),
     doctor_email VARCHAR(255),
     doctor_contact VARCHAR(50),
@@ -97,11 +90,9 @@ String get createClinicSettingsTable => '''
 String get createUsersTable => '''
   CREATE TABLE $tableUsers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    clinic_id TEXT NOT NULL,
     username VARCHAR(50) NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     email VARCHAR(255) NOT NULL,
-    role VARCHAR(20) DEFAULT 'Receptionist',
     created_at DATETIME,
     reset_otp VARCHAR(10),
     otp_expiry DATETIME,
@@ -112,25 +103,22 @@ String get createUsersTable => '''
 String get createMedicinesTable => '''
   CREATE TABLE $tableMedicines (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    clinic_id TEXT NOT NULL,
     name VARCHAR NOT NULL,
-    UNIQUE (clinic_id, name)
+    UNIQUE (name)
   )
 ''';
 
 String get createSymptomsMasterTable => '''
   CREATE TABLE $tableSymptomsMaster (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    clinic_id TEXT NOT NULL,
     name TEXT NOT NULL,
-    UNIQUE (clinic_id, name)
+    UNIQUE (name)
   )
 ''';
 
 String get createPatientImagesTable => '''
   CREATE TABLE $tablePatientImages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    clinic_id INTEGER NOT NULL,
     patient_id INTEGER NOT NULL,
     opd_visit_id INTEGER DEFAULT NULL,
     file_path VARCHAR(500) NOT NULL,
@@ -147,7 +135,6 @@ String get createPatientImagesTable => '''
 String get createSyncQueueTable => '''
   CREATE TABLE $tableSyncQueue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    clinic_id TEXT NOT NULL,
     entity_type VARCHAR(20) NOT NULL,
     entity_id VARCHAR(100) NOT NULL,
     operation VARCHAR(20) DEFAULT 'upsert',
@@ -156,34 +143,6 @@ String get createSyncQueueTable => '''
     last_error TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     last_attempt DATETIME
-  )
-''';
-
-String get createCloudSyncQueueTable => '''
-  CREATE TABLE $tableCloudSyncQueue (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    table_name TEXT NOT NULL,
-    operation TEXT NOT NULL,
-    record_id TEXT NOT NULL,
-    payload TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    sync_status TEXT DEFAULT 'pending',
-    retry_count INTEGER DEFAULT 0
-  )
-''';
-
-String get createDeviceRegistrationTable => '''
-  CREATE TABLE $tableDeviceRegistration (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    device_id TEXT NOT NULL UNIQUE,
-    device_name TEXT,
-    clinic_id TEXT,
-    fcm_token TEXT,
-    app_version TEXT,
-    last_seen TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
   )
 ''';
 
@@ -219,14 +178,6 @@ String get createixClinicSettingsId => '''
   CREATE INDEX ix_clinic_settings_id ON $tableClinicSettings (id)
 ''';
 
-String get createixCloudSyncQueueStatus => '''
-  CREATE INDEX ix_cloud_sync_queue_status ON $tableCloudSyncQueue (sync_status)
-''';
-
-String get createixDeviceRegistrationDeviceId => '''
-  CREATE UNIQUE INDEX ix_device_registration_device_id ON $tableDeviceRegistration (device_id)
-''';
-
 List<String> get createStatements => [
   createPatientsTable,
   createOpdVisitsTable,
@@ -237,8 +188,6 @@ List<String> get createStatements => [
   createSymptomsMasterTable,
   createPatientImagesTable,
   createSyncQueueTable,
-  createCloudSyncQueueTable,
-  createDeviceRegistrationTable,
   createixPatientsId,
   createixPatientsSyncId,
   createixOpdVisitsId,
@@ -247,6 +196,4 @@ List<String> get createStatements => [
   createixSyncQueueId,
   createixUsersId,
   createixClinicSettingsId,
-  createixCloudSyncQueueStatus,
-  createixDeviceRegistrationDeviceId,
 ];

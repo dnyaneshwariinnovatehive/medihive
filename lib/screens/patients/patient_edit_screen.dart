@@ -45,7 +45,9 @@ class _PatientEditScreenState extends State<PatientEditScreen> {
 
   int _toSqliteId(String hiveId) {
     final match = RegExp(r'(\d+)').firstMatch(hiveId);
-    if (match != null) return int.parse(match.group(1)!);
+    if (match != null) {
+      return int.tryParse(match.group(1)!) ?? 0;
+    }
     return 0;
   }
 
@@ -92,7 +94,7 @@ class _PatientEditScreenState extends State<PatientEditScreen> {
       if (_patientRow == null) {
         throw Exception('Patient data not loaded');
       }
-      final sqliteId = _patientRow!['id'] as int;
+      final sqliteId = Helpers.toInt(_patientRow!['id']);
       final patientSyncId = _patientRow!['sync_id'] as String? ?? '';
       print('PATIENT EDIT SAVE: patientSyncId=$patientSyncId sqliteId=$sqliteId');
 

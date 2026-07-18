@@ -10,6 +10,7 @@ import '../repositories/opd_record_repository.dart';
 import '../repositories/sync_queue_repository.dart';
 import 'local_notification_service.dart' as local_notif;
 import 'shared_notification_plugin.dart';
+import '../utils/helpers.dart';
 
 class DailySummaryService {
   DailySummaryService._();
@@ -144,7 +145,7 @@ class DailySummaryService {
       final opdRepo = OpdRecordRepository();
       final todayRecords = await opdRepo.getByDate(today);
       opdCount = todayRecords.length;
-      patientCount = todayRecords.map((r) => r['patient_id'] as int).toSet().length;
+      patientCount = todayRecords.map((r) => Helpers.toInt(r['patient_id'])).toSet().length;
     } catch (_) {}
 
     // Pending follow-ups

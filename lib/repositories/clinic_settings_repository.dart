@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 import '../database/database_helper.dart';
 import '../database/schema.dart';
+import '../utils/helpers.dart';
 
 class ClinicSettingsRepository {
   Future<Database> get _db async => DatabaseHelper().database;
@@ -35,7 +36,7 @@ class ClinicSettingsRepository {
   Future<int> upsert(Map<String, dynamic> row) async {
     final existing = await getFirst();
     if (existing != null) {
-      return update(existing['id'] as int, row);
+      return update(Helpers.toInt(existing['id']), row);
     }
     return insert(row);
   }

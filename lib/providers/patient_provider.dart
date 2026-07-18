@@ -7,6 +7,7 @@ import '../models/patient_model.dart';
 import '../repositories/patient_repository.dart';
 import '../repositories/sync_queue_repository.dart';
 import '../utils/sync_id_generator.dart';
+import '../utils/helpers.dart';
 import '../services/sync_manager.dart';
 import '../services/cloud_sync_manager.dart';
 import '../repositories/opd_record_repository.dart';
@@ -176,11 +177,11 @@ class PatientProvider extends ChangeNotifier {
     try {
       final patient = await _repo.getBySyncId(patientId);
       if (patient != null) {
-        final sqliteId = patient['id'] as int;
+        final sqliteId = Helpers.toInt(patient['id']);
         final opdRepo = OpdRecordRepository();
         final records = await opdRepo.getByPatientId(sqliteId);
         for (final record in records) {
-          await opdRepo.delete(record['id'] as int);
+          await opdRepo.delete(Helpers.toInt(record['id']));
         }
         await _repo.delete(sqliteId);
       }
@@ -240,7 +241,7 @@ class PatientProvider extends ChangeNotifier {
         };
         print('PATIENT ADD: updating patient id=${existing['id']} syncId=${formData.patientId}');
         print('PATIENT ADD: name="${updateData['full_name']}" gender="${updateData['gender']}" mobile="${updateData['mobile_number']}"');
-        final affected = await _repo.update(existing['id'] as int, updateData);
+        final affected = await _repo.update(Helpers.toInt(existing['id']), updateData);
         print('PATIENT ADD: update affectedRows=$affected');
         if (affected == 0) {
           print('PATIENT ADD CRITICAL: UPDATE affected 0 rows!');
@@ -313,7 +314,7 @@ class PatientProvider extends ChangeNotifier {
       final allOpd = await opdRepo.getAll();
       final latestByPatient = <int, Map<String, dynamic>>{};
       for (final row in allOpd) {
-        final pid = row['patient_id'] as int;
+        final pid = Helpers.toInt(row['patient_id']);
         final existing = latestByPatient[pid];
         final visitDt = row['visit_datetime'] as String? ?? '';
         if (existing == null || visitDt.compareTo(existing['visit_datetime'] as String? ?? '') > 0) {
@@ -338,7 +339,9 @@ class PatientProvider extends ChangeNotifier {
 
   int _toSqliteId(String hiveId) {
     final match = RegExp(r'(\d+)').firstMatch(hiveId);
-    if (match != null) return int.parse(match.group(1)!);
+    if (match != null) {
+      return int.tryParse(match.group(1)!) ?? 0;
+    }
     return 0;
   }
 
@@ -348,7 +351,7 @@ class PatientProvider extends ChangeNotifier {
 
   PatientModel _rowToModel(Map<String, dynamic> row) {
     return PatientModel(
-      id: row['sync_id'] as String? ?? _toStringId(row['id'] as int),
+      id: row['sync_id'] as String? ?? _toStringId(Helpers.toInt(row['id'])),
       name: row['full_name'] as String? ?? '',
       dob: row['dob'] as String? ?? '',
       age: row['age'] as int? ?? 0,

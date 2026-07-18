@@ -6,6 +6,12 @@ import '../database/schema.dart';
 class SyncQueueRepository {
   Future<Database> get _db async => DatabaseHelper().database;
 
+  Future<bool> _hasColumn(String tableName, String columnName) async {
+    final db = await _db;
+    final columns = await db.rawQuery('PRAGMA table_info($tableName)');
+    return columns.any((c) => c['name'] == columnName);
+  }
+
   Future<List<Map<String, dynamic>>> getAll() async {
     final db = await _db;
     return db.query(tableSyncQueue, orderBy: 'created_at ASC');
@@ -52,9 +58,8 @@ class SyncQueueRepository {
   Future<int> insert(Map<String, dynamic> row) async {
     final db = await _db;
     debugPrint('SYNC_QUEUE INSERT: id=${row['id']} type=${row['entity_type']} entity_id=${row['entity_id']} status=${row['status']}');
-    final result = await db.insert(tableSyncQueue, {
-      'id': row['id'],
-      'clinic_id': row['clinic_id'] ?? '',
+    final hasClinicId = await _hasColumn(tableSyncQueue, 'clinic_id');
+    final data = <String, dynamic>{
       'entity_type': row['entity_type'],
       'entity_id': row['entity_id'],
       'operation': row['operation'] ?? 'upsert',
@@ -63,7 +68,11 @@ class SyncQueueRepository {
       'last_error': row['last_error'],
       'created_at': row['created_at'],
       'last_attempt': row['last_attempt'],
-    });
+    };
+    if (hasClinicId) {
+      data['clinic_id'] = row['clinic_id'] ?? '';
+    }
+    final result = await db.insert(tableSyncQueue, data);
     debugPrint('SYNC_QUEUE INSERT RESULT: $result');
     return result;
   }

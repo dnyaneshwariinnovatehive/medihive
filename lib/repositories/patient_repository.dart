@@ -5,6 +5,12 @@ import '../database/schema.dart';
 class PatientRepository {
   Future<Database> get _db async => DatabaseHelper().database;
 
+  Future<bool> _hasColumn(String tableName, String columnName) async {
+    final db = await _db;
+    final columns = await db.rawQuery('PRAGMA table_info($tableName)');
+    return columns.any((c) => c['name'] == columnName);
+  }
+
   Future<List<Map<String, dynamic>>> getAll() async {
     final db = await _db;
     return db.query(tablePatients, orderBy: 'id ASC');
@@ -29,7 +35,8 @@ class PatientRepository {
   Future<int> insert(Map<String, dynamic> row) async {
     final now = DateTime.now().toIso8601String();
     final db = await _db;
-    return db.insert(tablePatients, {
+    final hasUpdatedAt = await _hasColumn(tablePatients, 'updated_at');
+    final data = <String, dynamic>{
       'id': row['id'],
       'sync_id': row['sync_id'],
       'full_name': row['full_name'],
@@ -41,16 +48,24 @@ class PatientRepository {
       'blood_group': row['blood_group'],
       'address': row['address'],
       'created_at': row['created_at'] ?? now,
-      'updated_at': row['updated_at'] ?? row['created_at'] ?? now,
-    });
+    };
+    if (hasUpdatedAt) {
+      data['updated_at'] = row['updated_at'] ?? row['created_at'] ?? now;
+    }
+    return db.insert(tablePatients, data);
   }
 
   Future<int> update(int id, Map<String, dynamic> row) async {
     final db = await _db;
-    final affected = await db.update(tablePatients, {
-      ...row,
-      'updated_at': row['updated_at'] ?? DateTime.now().toIso8601String(),
-    }, where: 'id = ?', whereArgs: [id]);
+    final hasUpdatedAt = await _hasColumn(tablePatients, 'updated_at');
+    final data = Map<String, dynamic>.from(row);
+    if (hasUpdatedAt) {
+      data['updated_at'] = data['updated_at'] ?? DateTime.now().toIso8601String();
+    } else {
+      data.remove('updated_at');
+    }
+    data.remove('clinic_id');
+    final affected = await db.update(tablePatients, data, where: 'id = ?', whereArgs: [id]);
     print('PATIENT REPO UPDATE: id=$id affectedRows=$affected');
     return affected;
   }
@@ -59,7 +74,7 @@ class PatientRepository {
     final db = await _db;
     return db.update(
       tablePatients,
-      {'sync_id': newSyncId, 'updated_at': DateTime.now().toIso8601String()},
+      {'sync_id': newSyncId},
       where: 'sync_id = ?',
       whereArgs: [oldSyncId],
     );

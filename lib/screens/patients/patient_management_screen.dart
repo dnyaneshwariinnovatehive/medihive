@@ -12,6 +12,7 @@ import '../../database/database_helper.dart';
 import '../../database/schema.dart';
 import '../../widgets/animated_list_item.dart';
 import '../../widgets/pressable_card.dart';
+import '../../utils/helpers.dart';
 import '../../widgets/standard_header.dart';
 
 class PatientManagementScreen extends StatefulWidget {
@@ -86,7 +87,7 @@ class _PatientManagementScreenState extends State<PatientManagementScreen> {
       if (rows.isEmpty) {
         _datePatientIds = {};
       } else {
-        final patientIds = rows.map((r) => r['patient_id'] as int).toSet().toList();
+        final patientIds = rows.map((r) => Helpers.toInt(r['patient_id'])).toSet().toList();
         final db = await DatabaseHelper().database;
         final placeholders = patientIds.map((_) => '?').join(',');
         final patientRows = await db.query(
@@ -97,7 +98,7 @@ class _PatientManagementScreenState extends State<PatientManagementScreen> {
         );
         _datePatientIds = patientRows
             .map<String>((r) => (r['sync_id'] as String?) ??
-                'P${(r['id'] as int).toString().padLeft(3, '0')}')
+                'P${Helpers.toInt(r['id']).toString().padLeft(3, '0')}')
             .where((id) => id.isNotEmpty)
             .toSet();
       }

@@ -10,9 +10,9 @@ import 'connectivity_service.dart';
 import '../models/appointment_model.dart';
 import '../repositories/patient_repository.dart';
 import '../repositories/opd_record_repository.dart';
-import '../repositories/cloud_sync_queue_repository.dart';
-import '../repositories/device_registration_repository.dart';
+
 import '../repositories/patient_images_repository.dart';
+import '../utils/helpers.dart';
 import 'dart:math';
 
 enum CloudSyncState {
@@ -37,8 +37,7 @@ class CloudSyncManager extends ChangeNotifier {
   final ConnectivityService _connectivity = ConnectivityService();
   final PatientRepository _patientRepo = PatientRepository();
   final OpdRecordRepository _opdRepo = OpdRecordRepository();
-  final CloudSyncQueueRepository _cloudQueueRepo = CloudSyncQueueRepository();
-  final DeviceRegistrationRepository _deviceRegRepo = DeviceRegistrationRepository();
+
   final PatientImagesRepository _imagesRepo = PatientImagesRepository();
 
   static final CloudSyncManager _instance = CloudSyncManager._internal();
@@ -112,25 +111,13 @@ class CloudSyncManager extends ChangeNotifier {
   }
 
   /// Notify that a local change occurred.
-  /// Adds an entry to cloud_sync_queue for later upload.
   Future<void> notifyChange({
     required String tableName,
     required String operation,
     required String recordId,
     Map<String, dynamic>? payload,
   }) async {
-    if (!_isRunning) return;
-    try {
-      await _cloudQueueRepo.insert({
-        'table_name': tableName,
-        'operation': operation,
-        'record_id': recordId,
-        'payload': payload != null ? jsonEncode(payload) : null,
-      });
-      debugPrint('CLOUD QUEUE: added $operation $tableName $recordId');
-    } catch (e) {
-      debugPrint('CLOUD QUEUE: insert failed: $e');
-    }
+    debugPrint('CLOUD QUEUE: notifyChange called for $operation $tableName $recordId (queue removed)');
   }
 
   /// Force an immediate cloud sync.
@@ -171,9 +158,6 @@ class CloudSyncManager extends ChangeNotifier {
       // 2. Download remote changes
       await _downloadChanges();
 
-      // 3. Clear synced queue entries
-      await _cloudQueueRepo.clearSynced();
-
       _syncCount++;
       _state = CloudSyncState.synced;
       debugPrint('CLOUD SYNC: cycle $_syncCount complete');
@@ -185,66 +169,46 @@ class CloudSyncManager extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Upload all pending cloud_sync_queue entries.
+  /// Upload all local changes directly (no queue tracking).
   Future<void> _uploadChanges() async {
-    final pending = await _cloudQueueRepo.getPending();
-    if (pending.isEmpty) {
-      debugPrint('CLOUD UPLOAD: nothing pending');
-      return;
-    }
-
-    // Group pending entries by table_name to build payloads
     final patients = <Map<String, dynamic>>[];
     final opdRecords = <Map<String, dynamic>>[];
     final appointments = <Map<String, dynamic>>[];
     final deletedEntities = <Map<String, String>>[];
-    final uploadedOpdRecordIds = <String>[];
 
-    for (final entry in pending) {
-      final tableName = entry['table_name'] as String? ?? '';
-      final operation = entry['operation'] as String? ?? 'upsert';
-      final recordId = entry['record_id'] as String? ?? '';
-
-      if (operation == 'delete') {
-        deletedEntities.add({'entity_type': tableName, 'entity_id': recordId});
-        continue;
+    try {
+      final allPatients = await _patientRepo.getAll();
+      for (final row in allPatients) {
+        patients.add(await _patientRowToMap(row));
       }
-
-      try {
-        if (tableName == 'patients') {
-          final row = await _patientRepo.getBySyncId(recordId);
-          if (row != null) {
-            patients.add(await _patientRowToMap(row));
-          }
-        } else if (tableName == 'opd_visits') {
-          final row = await _opdRepo.getByOpdId(recordId);
-          if (row != null) {
-            opdRecords.add(await _opdRowToMap(row));
-            uploadedOpdRecordIds.add(recordId);
-          }
-        } else if (tableName == 'appointments') {
-          try {
-            final box = Hive.box<AppointmentModel>('appointments');
-            final appt = box.get(recordId);
-            if (appt != null) {
-              appointments.add(appt.toJson());
-            }
-          } catch (_) {}
-        }
-      } catch (e) {
-        debugPrint('CLOUD UPLOAD: error building payload for $tableName $recordId: $e');
-      }
+    } catch (e) {
+      debugPrint('CLOUD UPLOAD: error building patients: $e');
     }
 
+    try {
+      final allOpd = await _opdRepo.getAll();
+      for (final row in allOpd) {
+        opdRecords.add(await _opdRowToMap(row));
+      }
+    } catch (e) {
+      debugPrint('CLOUD UPLOAD: error building opd records: $e');
+    }
+
+    try {
+      final box = Hive.box<AppointmentModel>('appointments');
+      for (final appt in box.values) {
+        appointments.add(appt.toJson());
+      }
+    } catch (_) {}
+
     if (patients.isEmpty && opdRecords.isEmpty && appointments.isEmpty && deletedEntities.isEmpty) {
-      debugPrint('CLOUD UPLOAD: nothing to upload after building payloads');
+      debugPrint('CLOUD UPLOAD: nothing to upload');
       return;
     }
 
-    debugPrint('CLOUD DEVICE DEBUG: upload clinic_id=$_clinicId device_id=$_deviceId');
-    debugPrint('CLOUD DEVICE DEBUG: upload patients=${patients.length} opd=${opdRecords.length} appts=${appointments.length} deleted=${deletedEntities.length}');
+    debugPrint('CLOUD UPLOAD: patients=${patients.length} opd=${opdRecords.length} appts=${appointments.length}');
     try {
-      final response = await ApiService.cloudUpload(
+      await ApiService.cloudUpload(
         deviceId: _deviceId!,
         clinicId: _clinicId!,
         patients: patients,
@@ -252,120 +216,9 @@ class CloudSyncManager extends ChangeNotifier {
         appointments: appointments,
         deletedEntities: deletedEntities,
       );
-      debugPrint('CLOUD_DEBUG: _uploadChanges ApiService.cloudUpload returned response=$response');
-      debugPrint('CLOUD DEVICE DEBUG: upload response keys=${response.keys.join(", ")}');
-      debugPrint('CLOUD DEVICE DEBUG: stored patients=${(response["results"]?["patients"] as List?)?.length ?? 0}');
-      debugPrint('CLOUD DEVICE DEBUG: stored opd_records=${(response["results"]?["opd_records"] as List?)?.length ?? 0}');
-
-      // Mark uploaded entries as synced
-      for (final entry in pending) {
-        await _cloudQueueRepo.markSynced(entry['id'] as int);
-      }
-
-      // Upload images for OPD records that have pending local images.
-      // Images can be stored in two places:
-      //   1. patient_images SQLite table (file on disk, set by data migration)
-      //   2. Hive 'opd_documents' box (base64, set by normal OPD save flow)
-      if (uploadedOpdRecordIds.isNotEmpty) {
-        debugPrint('CLOUD IMAGE DEBUG: uploadedOpdRecordIds=$uploadedOpdRecordIds');
-        try {
-          final opdVisitIdsWithPending =
-              await _imagesRepo.getDistinctOpdVisitIdsWithPending();
-          final docBox = Hive.box('opd_documents');
-          for (final uploadedId in uploadedOpdRecordIds) {
-            final localRow = await _opdRepo.getByOpdId(uploadedId);
-            if (localRow == null) {
-              debugPrint('CLOUD IMAGE DEBUG: localRow null for uploadedId=$uploadedId');
-              continue;
-            }
-            final localOpdId = localRow['id'] as int;
-            debugPrint(
-                'CLOUD IMAGE DEBUG: uploadedId=$uploadedId mapped to localOpdId=$localOpdId');
-
-            File? hiveTempFile;
-            List<File> imageFiles = [];
-
-            // Try SQLite patient_images first
-            if (opdVisitIdsWithPending.contains(localOpdId)) {
-              final pendingImages =
-                  await _imagesRepo.getPendingByOpdVisitId(localOpdId);
-              debugPrint(
-                  'CLOUD IMAGE DEBUG: found local images from SQLite count=${pendingImages.length}');
-              for (final img in pendingImages) {
-                final path = img['file_path'] as String?;
-                debugPrint('CLOUD IMAGE DEBUG: SQLite image path=$path');
-                if (path != null && path.isNotEmpty) {
-                  final file = File(path);
-                  final exists = await file.exists();
-                  debugPrint(
-                      'CLOUD IMAGE DEBUG: SQLite file exists=$exists for path=$path');
-                  if (exists) {
-                    imageFiles.add(file);
-                  }
-                }
-              }
-            }
-
-            // If nothing in SQLite, try Hive opd_documents box
-            if (imageFiles.isEmpty && docBox.containsKey(uploadedId)) {
-              final raw = docBox.get(uploadedId);
-              debugPrint(
-                  'CLOUD IMAGE DEBUG: found Hive opd_documents entry for uploadedId=$uploadedId raw type=${raw.runtimeType}');
-              if (raw != null) {
-                try {
-                  final bytes = base64Decode(raw.toString());
-                  hiveTempFile = File(
-                    '${Directory.systemTemp.path}/${uploadedId}_${DateTime.now().microsecondsSinceEpoch}.jpg',
-                  );
-                  await hiveTempFile.writeAsBytes(bytes);
-                  imageFiles = [hiveTempFile];
-                  debugPrint(
-                      'CLOUD IMAGE DEBUG: decoded Hive image to temp file path=${hiveTempFile.path}');
-                } catch (e) {
-                  debugPrint(
-                      'CLOUD IMAGE DEBUG: failed to decode Hive image: $e');
-                }
-              }
-            }
-
-            if (imageFiles.isEmpty) {
-              debugPrint(
-                  'CLOUD IMAGE: no valid local files for OPD $uploadedId (neither SQLite nor Hive)');
-              continue;
-            }
-
-            debugPrint(
-                'CLOUD IMAGE DEBUG: calling ApiService.cloudUploadImages(opdId=$uploadedId, files=${imageFiles.length})');
-            await ApiService.cloudUploadImages(uploadedId, imageFiles);
-
-            // Clean up based on source
-            if (opdVisitIdsWithPending.contains(localOpdId)) {
-              await _imagesRepo.markSyncedByOpdVisitId(localOpdId);
-              debugPrint(
-                  'CLOUD IMAGE: SQLite images marked synced for OPD $uploadedId');
-            }
-            if (docBox.containsKey(uploadedId)) {
-              await docBox.delete(uploadedId);
-              debugPrint(
-                  'CLOUD IMAGE: Hive opd_documents entry deleted for OPD $uploadedId');
-            }
-            // Delete temp file if we created one
-            if (hiveTempFile != null && await hiveTempFile.exists()) {
-              await hiveTempFile.delete();
-              debugPrint(
-                  'CLOUD IMAGE DEBUG: deleted temp file ${hiveTempFile.path}');
-            }
-            debugPrint('CLOUD IMAGE: completed for OPD $uploadedId');
-          }
-        } catch (e) {
-          debugPrint('CLOUD IMAGE: upload error (non-fatal): $e');
-        }
-      }
-
       debugPrint('CLOUD UPLOAD: completed');
     } catch (e) {
-      debugPrint('CLOUD_DEBUG: _uploadChanges CAUGHT: $e');
-      debugPrint('CLOUD_DEBUG: _uploadChanges stack: ${StackTrace.current}');
+      debugPrint('CLOUD UPLOAD: error: $e');
       rethrow;
     }
   }
@@ -417,7 +270,7 @@ class CloudSyncManager extends ChangeNotifier {
         if (existing == null ||
             (remoteUpdatedAt != null && localUpdatedAt != null && remoteUpdatedAt.isAfter(localUpdatedAt))) {
           if (existing != null) {
-            final sqliteId = existing['id'] as int;
+            final sqliteId = Helpers.toInt(existing['id']);
             await _patientRepo.update(sqliteId, _remotePatientToRow(map, sqliteId, remoteId));
           } else {
             final maxId = await _patientRepo.getMaxId();
@@ -445,7 +298,7 @@ class CloudSyncManager extends ChangeNotifier {
         if (existing == null ||
             (remoteUpdatedAt != null && localUpdatedAt != null && remoteUpdatedAt.isAfter(localUpdatedAt))) {
           final localId = existing != null
-              ? existing['id'] as int
+              ? Helpers.toInt(existing['id'])
               : (await _opdRepo.getMaxId()) + 1;
           final row = await _remoteOpdToRow(map, localId);
           if (existing != null) {
@@ -510,10 +363,10 @@ class CloudSyncManager extends ChangeNotifier {
         if (etype == 'patients' || etype == 'patient') {
           final local = await _patientRepo.getBySyncId(eid);
           if (local != null) {
-            final localId = local['id'] as int;
+            final localId = Helpers.toInt(local['id']);
             final patientOpds = await _opdRepo.getByPatientId(localId);
             for (final opd in patientOpds) {
-              final opdSqlId = opd['id'] as int;
+              final opdSqlId = Helpers.toInt(opd['id']);
               await _imagesRepo.deleteByOpdVisitId(opdSqlId);
             }
             await _opdRepo.deleteByPatientId(localId);
@@ -522,7 +375,7 @@ class CloudSyncManager extends ChangeNotifier {
         } else if (etype == 'opd_visits' || etype == 'opd_visit') {
           final local = await _opdRepo.getByOpdId(eid);
           if (local != null) {
-            final localId = local['id'] as int;
+            final localId = Helpers.toInt(local['id']);
             await _imagesRepo.deleteByOpdVisitId(localId);
             // Remove associated follow-up appointment from Hive
             final nextVisit = local['next_visit_date']?.toString() ?? '';
@@ -599,16 +452,13 @@ class CloudSyncManager extends ChangeNotifier {
   // ─── Helpers ──────────────────────────────────────
 
   Future<String> _loadOrCreateDeviceId() async {
-    final existing = await _deviceRegRepo.get();
-    if (existing != null) {
-      return existing['device_id'] as String;
+    final prefs = await SharedPreferences.getInstance();
+    final existing = prefs.getString('device_id');
+    if (existing != null && existing.isNotEmpty) {
+      return existing;
     }
     final newId = _generateDeviceId();
-    await _deviceRegRepo.insert({
-      'device_id': newId,
-      'device_name': '',
-      'clinic_id': '',
-    });
+    await prefs.setString('device_id', newId);
     return newId;
   }
 
@@ -662,7 +512,7 @@ class CloudSyncManager extends ChangeNotifier {
     final createdAt = row['created_at'] as String? ?? '';
     final createdDt = DateTime.tryParse(createdAt) ?? DateTime.now();
     final visitDt = row['visit_datetime'] as String? ?? '';
-    final localPatientId = row['patient_id'] as int? ?? 0;
+    final localPatientId = Helpers.toInt(row['patient_id']);
     String patientSyncId;
     String patientBloodGroup = '';
     try {
@@ -724,7 +574,7 @@ class CloudSyncManager extends ChangeNotifier {
     int localPatientId;
     try {
       final patient = await _patientRepo.getBySyncId(remotePatientId);
-      localPatientId = patient?['id'] as int? ?? 0;
+      localPatientId = Helpers.toInt(patient?['id']);
     } catch (_) {
       localPatientId = 0;
     }

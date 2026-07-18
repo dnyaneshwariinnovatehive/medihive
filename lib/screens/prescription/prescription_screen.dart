@@ -14,6 +14,7 @@ import '../../repositories/patient_repository.dart';
 import '../../repositories/opd_record_repository.dart';
 import '../../repositories/sync_queue_repository.dart';
 import '../../services/sync_manager.dart';
+import '../../utils/helpers.dart';
 import '../../utils/sync_id_generator.dart';
 import '../../widgets/standard_header.dart';
 import '../../services/prescription_pdf_service.dart';
@@ -82,7 +83,7 @@ class _PrescriptionScreenState extends State<PrescriptionScreen> {
 
       int sqliteId;
       if (patientRow != null) {
-        sqliteId = patientRow['id'] as int;
+        sqliteId = Helpers.toInt(patientRow['id']);
       } else {
         sqliteId = int.tryParse(widget.patientId.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
         if (sqliteId > 0) {
@@ -287,7 +288,7 @@ class _PrescriptionScreenState extends State<PrescriptionScreen> {
         : (_latestRecord['next_visit_date'] as String? ?? '');
 
     try {
-      await opdRepo.update(_latestRecord['id'] as int, updatedRow);
+      await opdRepo.update(Helpers.toInt(_latestRecord['id']), updatedRow);
 
       final syncQueueRepo = SyncQueueRepository();
       await syncQueueRepo.insert({

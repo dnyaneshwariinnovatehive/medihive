@@ -11,6 +11,7 @@ import '../repositories/opd_record_repository.dart';
 import 'notification_provider.dart';
 import '../services/daily_summary_service.dart';
 import '../utils/sync_id_generator.dart';
+import '../utils/helpers.dart';
 
 class AppointmentProvider extends ChangeNotifier {
   final CalendarNotesRepository _notesRepo = CalendarNotesRepository();
@@ -344,7 +345,7 @@ class AppointmentProvider extends ChangeNotifier {
       final existing = await _notesRepo.getByDate(sqlDate);
       final now = DateTime.now().toIso8601String();
       if (existing != null) {
-        await _notesRepo.update(existing['id'] as int, {
+        await _notesRepo.update(Helpers.toInt(existing['id']), {
           'note_text': noteText,
           'updated_at': now,
         });

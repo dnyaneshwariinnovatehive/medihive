@@ -16,6 +16,7 @@ import '../repositories/opd_record_repository.dart';
 import '../repositories/sync_queue_repository.dart';
 import '../repositories/patient_images_repository.dart';
 import '../database/database_helper.dart';
+import '../utils/helpers.dart';
 
 enum SyncState {
   offline,
@@ -236,7 +237,7 @@ class SyncManager extends ChangeNotifier {
   Future<String> _patientSyncId(Map<String, dynamic> row) async {
     final syncId = row['sync_id'] as String?;
     if (syncId != null && syncId.isNotEmpty) return syncId;
-    return _patientToStringId(row['id'] as int);
+    return _patientToStringId(Helpers.toInt(row['id']));
   }
 
   Future<Map<String, dynamic>> _patientRowToPushMap(Map<String, dynamic> row) async {
@@ -262,7 +263,7 @@ class SyncManager extends ChangeNotifier {
     final createdAt = row['created_at'] as String? ?? '';
     final createdDt = DateTime.tryParse(createdAt) ?? DateTime.now();
     final visitDt = row['visit_datetime'] as String? ?? '';
-    final localPatientId = row['patient_id'] as int? ?? 0;
+    final localPatientId = Helpers.toInt(row['patient_id']);
     String patientSyncId;
     String patientBloodGroup = '';
     try {
@@ -275,7 +276,7 @@ class SyncManager extends ChangeNotifier {
     final pkNotes = row['panchakarma_notes'] ?? '';
     print('SYNC DEBUG: _opdRowToPushMap panchakarma_notes="${pkNotes}"');
     return {
-      'id': row['opd_id']?.toString() ?? _opdToStringId(row['id'] as int),
+      'id': row['opd_id']?.toString() ?? _opdToStringId(Helpers.toInt(row['id'])),
       'patient_id': patientSyncId,
       'opd_type': row['opd_type'] ?? 'consultation',
       'symptoms': row['symptoms'] ?? '',
@@ -326,7 +327,7 @@ class SyncManager extends ChangeNotifier {
     int localPatientId;
     try {
       final patient = await _patientRepo.getBySyncId(remotePatientId);
-      localPatientId = patient?['id'] as int? ?? _toSqlitePatientId(remotePatientId);
+      localPatientId = Helpers.toInt(patient?['id'], _toSqlitePatientId(remotePatientId));
     } catch (_) {
       localPatientId = _toSqlitePatientId(remotePatientId);
     }
@@ -489,7 +490,7 @@ class SyncManager extends ChangeNotifier {
         // Mark queue entries as synced
         final now = DateTime.now();
         for (final entry in pendingEntries) {
-          await _syncQueueRepo.update(entry['id'] as int, {
+          await _syncQueueRepo.update(Helpers.toInt(entry['id']), {
             'status': 'synced',
             'last_attempt': now.toIso8601String(),
           });
@@ -510,7 +511,7 @@ class SyncManager extends ChangeNotifier {
         for (final entry in pendingEntries) {
           final retryCount = (entry['retry_count'] as int? ?? 0) + 1;
           final status = retryCount >= 5 ? 'failed' : 'pending';
-          await _syncQueueRepo.update(entry['id'] as int, {
+          await _syncQueueRepo.update(Helpers.toInt(entry['id']), {
             'retry_count': retryCount,
             'status': status,
             'last_error': e.toString(),
@@ -524,7 +525,7 @@ class SyncManager extends ChangeNotifier {
       debugPrint('SYNC no pushable data — closing ${pendingEntries.length} entries');
       // No pushable data (all entities deleted) — close entries
       for (final entry in pendingEntries) {
-        await _syncQueueRepo.update(entry['id'] as int, {
+        await _syncQueueRepo.update(Helpers.toInt(entry['id']), {
           'status': 'synced',
           'last_attempt': DateTime.now().toIso8601String(),
         });
@@ -577,7 +578,7 @@ class SyncManager extends ChangeNotifier {
           }
           continue;
         }
-        final sqliteId = row['id'] as int;
+        final sqliteId = Helpers.toInt(row['id']);
         print('IMAGES: OPD $opdId found in local DB (sqlite_id=$sqliteId)');
 
         final pendingImages =
@@ -690,7 +691,7 @@ class SyncManager extends ChangeNotifier {
           if (existing == null ||
               (remoteUpdatedAt != null && localUpdatedAt != null && remoteUpdatedAt.isAfter(localUpdatedAt))) {
             if (existing != null) {
-              final sqliteId = existing['id'] as int;
+              final sqliteId = Helpers.toInt(existing['id']);
               await _patientRepo.update(sqliteId, _remotePatientToRow(map, sqliteId, remoteId));
             } else {
               final maxId = await _patientRepo.getMaxId();
@@ -715,7 +716,7 @@ class SyncManager extends ChangeNotifier {
           if (existing == null ||
               (remoteUpdatedAt != null && localUpdatedAt != null && remoteUpdatedAt.isAfter(localUpdatedAt))) {
             final localId = existing != null
-                ? existing['id'] as int
+                ? Helpers.toInt(existing['id'])
                 : (await _opdRepo.getMaxId()) + 1;
             final row = await _remoteOpdToRow(map, localId);
             if (existing != null) {
@@ -778,10 +779,10 @@ class SyncManager extends ChangeNotifier {
           if (etype == 'patient') {
             final local = await _patientRepo.getBySyncId(eid);
             if (local != null) {
-              final localId = local['id'] as int;
+              final localId = Helpers.toInt(local['id']);
               final opds = await _opdRepo.getByPatientId(localId);
               for (final opd in opds) {
-                final opdSqlId = opd['id'] as int;
+                final opdSqlId = Helpers.toInt(opd['id']);
                 await _patientImagesRepo.deleteByOpdVisitId(opdSqlId);
               }
               await _opdRepo.deleteByPatientId(localId);
@@ -792,7 +793,7 @@ class SyncManager extends ChangeNotifier {
           } else if (etype == 'opd_visit') {
             final local = await _opdRepo.getByOpdId(eid);
             if (local != null) {
-              final localId = local['id'] as int;
+              final localId = Helpers.toInt(local['id']);
               await _patientImagesRepo.deleteByOpdVisitId(localId);
               await _opdRepo.delete(localId);
               await _syncQueueRepo.clearByEntity('opd_visit', eid);

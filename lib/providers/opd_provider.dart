@@ -255,7 +255,7 @@ class OpdProvider extends ChangeNotifier {
     try {
       final patient = await _patientRepo.getBySyncId(patientId);
       if (patient == null) return;
-      final sqliteId = patient['id'] as int;
+      final sqliteId = Helpers.toInt(patient['id']);
 
       updateField('patientId', patientId);
       updateField('name', patient['full_name']?.toString() ?? '');
@@ -621,7 +621,7 @@ class OpdProvider extends ChangeNotifier {
       int sqlitePatientId;
       try {
         final patient = await _patientRepo.getBySyncId(patientId);
-        sqlitePatientId = patient?['id'] as int? ?? _toSqliteId(patientId);
+        sqlitePatientId = Helpers.toInt(patient?['id']) != 0 ? Helpers.toInt(patient?['id']) : _toSqliteId(patientId);
       } catch (_) {
         sqlitePatientId = _toSqliteId(patientId);
       }
@@ -634,7 +634,7 @@ class OpdProvider extends ChangeNotifier {
         print('OPD SUBMIT: EDIT PATH — finding existing record by opd_id=$existingRecordId');
         final existing = await _opdRepo.getByOpdId(existingRecordId);
         if (existing != null) {
-          sqliteId = existing['id'] as int;
+          sqliteId = Helpers.toInt(existing['id']);
           preservedCreatedAt = DateTime.tryParse(existing['created_at']?.toString() ?? '') ?? DateTime.now();
           print('OPD SUBMIT: EDIT PATH — found existing record sqliteId=$sqliteId preservedCreatedAt=$preservedCreatedAt');
         } else {
@@ -816,7 +816,9 @@ class OpdProvider extends ChangeNotifier {
 
   int _toSqliteId(String hiveId) {
     final match = RegExp(r'(\d+)').firstMatch(hiveId);
-    if (match != null) return int.parse(match.group(1)!);
+    if (match != null) {
+      return int.tryParse(match.group(1)!) ?? 0;
+    }
     return 0;
   }
 

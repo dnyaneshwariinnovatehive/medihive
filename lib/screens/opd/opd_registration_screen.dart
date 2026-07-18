@@ -528,7 +528,7 @@ class _OpdRegistrationScreenState extends State<OpdRegistrationScreen> {
                                 final patient =
                                     await patientRepo.getBySyncId(patientSyncId);
                                 if (patient != null) {
-                                  final sqlitePatientId = patient['id'] as int;
+                                  final sqlitePatientId = Helpers.toInt(patient['id']);
                                   final opdRepo = OpdRecordRepository();
                                   final records = await opdRepo
                                       .getByPatientId(sqlitePatientId);
@@ -584,6 +584,14 @@ class _OpdRegistrationScreenState extends State<OpdRegistrationScreen> {
                               );
                             } catch (e) {
                               setState(() => _isSubmitting = false);
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Failed to save OPD record: $e'),
+                                    backgroundColor: Colors.red,
+                                  ),
+                                );
+                              }
                               rethrow;
                             }
 
