@@ -243,6 +243,10 @@ class SettingsProvider extends ChangeNotifier {
       'operating_hours': _clinicHours,
       'updated_at': DateTime.now().toIso8601String(),
     });
+    // Trigger sync so other devices get updated settings
+    try {
+      SyncManager().forceSyncNow();
+    } catch (_) {}
   }
 
   Future<void> toggleDarkMode() async {

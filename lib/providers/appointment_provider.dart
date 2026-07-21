@@ -10,6 +10,7 @@ import '../repositories/patient_repository.dart';
 import '../repositories/opd_record_repository.dart';
 import 'notification_provider.dart';
 import '../services/daily_summary_service.dart';
+import '../services/sync_manager.dart';
 import '../utils/sync_id_generator.dart';
 import '../utils/helpers.dart';
 
@@ -358,6 +359,10 @@ class AppointmentProvider extends ChangeNotifier {
           'updated_at': now,
         });
       }
+      // Trigger sync so other devices get updated notes
+      try {
+        SyncManager().forceSyncNow();
+      } catch (_) {}
     } catch (e, st) {
       debugPrint('SYNC QUEUE INSERT FAILED: $e');
       debugPrintStack(stackTrace: st);
@@ -369,6 +374,10 @@ class AppointmentProvider extends ChangeNotifier {
     try {
       final sqlDate = _hiveKeyToSqlDate(hiveKey);
       await _notesRepo.deleteByDate(sqlDate);
+      // Trigger sync so other devices get the deletion
+      try {
+        SyncManager().forceSyncNow();
+      } catch (_) {}
     } catch (e, st) {
       debugPrint('DELETE NOTES FAILED: $e');
       debugPrintStack(stackTrace: st);

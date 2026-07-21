@@ -75,6 +75,9 @@ class OPDRecord:
                 values.append(data[k])
         if not fields:
             return OPDRecord.get(record_id)
+        now = datetime.utcnow().isoformat()
+        fields.append("updated_at = %s")
+        values.append(now)
         values.append(record_id)
         db = get_db()
         db.execute(f"UPDATE opd_visits SET {', '.join(fields)} WHERE id = %s", values)
@@ -100,7 +103,7 @@ class OPDRecord:
     def updated_since(timestamp):
         db = get_db()
         rows = db.execute(
-            "SELECT * FROM opd_visits WHERE created_at > %s ORDER BY created_at",
+            "SELECT * FROM opd_visits WHERE COALESCE(updated_at, created_at) > %s ORDER BY COALESCE(updated_at, created_at)",
             (timestamp,)
         ).fetchall()
         db.close()

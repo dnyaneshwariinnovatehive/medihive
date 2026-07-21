@@ -2,6 +2,10 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models.patient import Patient
 from models.opd_record import OPDRecord
+from models.calendar_note import CalendarNote
+from models.clinic_setting import ClinicSetting
+from models.medicine import Medicine
+from models.symptom_master import SymptomMaster
 from database import get_db
 from datetime import datetime
 from pathlib import Path
@@ -110,10 +114,18 @@ def pull():
 
     patients = Patient.updated_since(last_sync)
     opd_records = OPDRecord.updated_since(last_sync)
+    calendar_notes = CalendarNote.updated_since(last_sync)
+    clinic_settings = ClinicSetting.updated_since(last_sync)
+    medicines = Medicine.all()
+    symptoms = SymptomMaster.all()
 
     return jsonify({
         'patients': patients,
         'opd_records': opd_records,
+        'calendar_notes': calendar_notes,
+        'clinic_settings': clinic_settings,
+        'medicines': medicines,
+        'symptoms': symptoms,
         'server_time': datetime.utcnow().isoformat(),
     }), 200
 
@@ -231,6 +243,38 @@ def push():
             msg = f"Sheet sync failed for OPD {opd_id}: {e}"
             logger.error(msg)
             sheet_errors.append(msg)
+
+    # Sync calendar_notes
+    for note in data.get('calendar_notes', []):
+        try:
+            CalendarNote.upsert(note)
+            logger.info("PUSH: calendar note for date %s synced", note.get('note_date'))
+        except Exception as e:
+            logger.warning("PUSH: calendar note sync failed: %s", e)
+
+    # Sync clinic_settings (singleton)
+    for setting in data.get('clinic_settings', []):
+        try:
+            ClinicSetting.upsert(setting)
+            logger.info("PUSH: clinic settings synced")
+        except Exception as e:
+            logger.warning("PUSH: clinic settings sync failed: %s", e)
+
+    # Sync medicines
+    for med in data.get('medicines', []):
+        try:
+            Medicine.upsert(med)
+            logger.info("PUSH: medicine %s synced", med.get('name'))
+        except Exception as e:
+            logger.warning("PUSH: medicine sync failed: %s", e)
+
+    # Sync symptoms
+    for sym in data.get('symptoms', []):
+        try:
+            SymptomMaster.upsert(sym)
+            logger.info("PUSH: symptom %s synced", sym.get('name'))
+        except Exception as e:
+            logger.warning("PUSH: symptom sync failed: %s", e)
 
     deleted_patients_confirmed = []
     deleted_opd_confirmed = []

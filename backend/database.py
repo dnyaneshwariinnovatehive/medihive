@@ -142,12 +142,12 @@ def _init_db():
     Creates all database tables if they don't exist and seeds the default admin user.
     Idempotent — safe to call multiple times.
     Only marks initialization complete AFTER successful commit.
-    Schema matches SQLite clinic.db — only 9 tables."""
+    Schema matches SQLite clinic.db / medihive.db — 9 tables."""
     global _db_initialized
     if _db_initialized:
         return
 
-    logger.critical("MIGRATION_TEST: init_db executed with panchakarma migration")
+    logger.info("Initializing database schema matching medihive.db source of truth")
     pool_obj = get_pool()
     conn = pool_obj.getconn()
     db = DBConnection(conn)
@@ -159,16 +159,16 @@ def _init_db():
         logger.debug("INIT_DB SQL [01]: %s", _last_sql)
         db.execute("""
             CREATE TABLE IF NOT EXISTS patients (
-                id              TEXT PRIMARY KEY,
-                full_name       TEXT NOT NULL,
-                mobile_number   TEXT NOT NULL,
-                alternate_mobile TEXT DEFAULT '',
-                gender          TEXT NOT NULL DEFAULT 'Not Specified',
-                dob             TEXT DEFAULT '',
-                age             INTEGER DEFAULT 0,
-                blood_group     TEXT DEFAULT 'Not Specified',
-                address         TEXT DEFAULT '',
-                created_at      TEXT NOT NULL
+                id              SERIAL PRIMARY KEY,
+                full_name       VARCHAR(255) NOT NULL,
+                mobile_number   VARCHAR(50) NOT NULL,
+                alternate_mobile VARCHAR(50),
+                gender          VARCHAR(50) NOT NULL,
+                dob             DATE,
+                age             INTEGER,
+                blood_group     VARCHAR(20),
+                address         TEXT,
+                created_at      TIMESTAMP
             );
         """)
         # Migrations for patients schema renaming
@@ -192,7 +192,7 @@ def _init_db():
         logger.debug("INIT_DB SQL [04]: %s", _last_sql)
         db.savepoint("sp_mig_04")
         try:
-            db.execute("ALTER TABLE patients ADD COLUMN alternate_mobile TEXT DEFAULT ''")
+            db.execute("ALTER TABLE patients ADD COLUMN alternate_mobile VARCHAR(50)")
         except Exception as e:
             logger.debug("INIT_DB SQL [04]: skipped — %s", e)
             db.rollback_to_savepoint("sp_mig_04")
@@ -202,27 +202,27 @@ def _init_db():
         logger.debug("INIT_DB SQL [05]: %s", _last_sql)
         db.execute("""
             CREATE TABLE IF NOT EXISTS opd_visits (
-                id                  TEXT PRIMARY KEY,
-                patient_id          TEXT NOT NULL,
-                opd_id              TEXT,
-                opd_type            TEXT DEFAULT 'consultation',
-                symptoms            TEXT DEFAULT '',
-                diagnosis           TEXT DEFAULT '',
-                medicines           TEXT DEFAULT '',
-                visit_datetime      TEXT NOT NULL,
-                clinical_notes      TEXT DEFAULT '',
-                consultation_fee    TEXT DEFAULT '0',
-                medicine_fee        TEXT DEFAULT '0',
-                panchakarma_fee     TEXT DEFAULT '0',
-                total_fee           TEXT DEFAULT '0',
-                discount_value      TEXT DEFAULT '0',
-                discount_type       TEXT DEFAULT 'None',
-                payment_mode        TEXT DEFAULT '',
-                charge_type         TEXT DEFAULT '',
-                followup_status     TEXT DEFAULT '',
-                next_visit_date     TEXT DEFAULT '',
-                panchakarma_notes   TEXT DEFAULT '',
-                created_at          TEXT NOT NULL
+                id                  SERIAL PRIMARY KEY,
+                opd_id              VARCHAR(255) NOT NULL,
+                patient_id          INTEGER NOT NULL REFERENCES patients(id),
+                visit_datetime      TIMESTAMP NOT NULL,
+                opd_type            VARCHAR(100),
+                charge_type         VARCHAR(100),
+                diagnosis           TEXT,
+                symptoms            TEXT,
+                clinical_notes      TEXT,
+                consultation_fee    DOUBLE PRECISION,
+                medicine_fee        DOUBLE PRECISION,
+                panchakarma_fee     DOUBLE PRECISION,
+                total_fee           DOUBLE PRECISION,
+                discount_type       VARCHAR(100),
+                discount_value      DOUBLE PRECISION,
+                payment_mode        VARCHAR(100),
+                next_visit_date     DATE,
+                followup_status     VARCHAR(100),
+                created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                medicines           TEXT,
+                panchakarma_notes   TEXT
             );
         """)
 
@@ -281,7 +281,7 @@ def _init_db():
         logger.debug("INIT_DB SQL [12]: %s", _last_sql)
         db.savepoint("sp_mig_12")
         try:
-            db.execute("ALTER TABLE opd_visits ADD COLUMN opd_id TEXT")
+            db.execute("ALTER TABLE opd_visits ADD COLUMN opd_id VARCHAR(255)")
         except Exception as e:
             logger.debug("INIT_DB SQL [12]: skipped — %s", e)
             db.rollback_to_savepoint("sp_mig_12")
@@ -289,7 +289,7 @@ def _init_db():
         logger.debug("INIT_DB SQL [13]: %s", _last_sql)
         db.savepoint("sp_mig_13")
         try:
-            db.execute("ALTER TABLE opd_visits ADD COLUMN panchakarma_notes TEXT DEFAULT ''")
+            db.execute("ALTER TABLE opd_visits ADD COLUMN panchakarma_notes TEXT")
         except Exception as e:
             logger.debug("INIT_DB SQL [13]: skipped — %s", e)
             db.rollback_to_savepoint("sp_mig_13")
@@ -297,7 +297,7 @@ def _init_db():
         logger.debug("INIT_DB SQL [14]: %s", _last_sql)
         db.savepoint("sp_mig_14")
         try:
-            db.execute("ALTER TABLE opd_visits ADD COLUMN panchakarma_fee TEXT DEFAULT '0'")
+            db.execute("ALTER TABLE opd_visits ADD COLUMN panchakarma_fee DOUBLE PRECISION")
         except Exception as e:
             logger.debug("INIT_DB SQL [14]: skipped — %s", e)
             db.rollback_to_savepoint("sp_mig_14")
@@ -305,7 +305,7 @@ def _init_db():
         logger.debug("INIT_DB SQL [15]: %s", _last_sql)
         db.savepoint("sp_mig_15")
         try:
-            db.execute("ALTER TABLE opd_visits ADD COLUMN total_fee TEXT DEFAULT '0'")
+            db.execute("ALTER TABLE opd_visits ADD COLUMN total_fee DOUBLE PRECISION")
         except Exception as e:
             logger.debug("INIT_DB SQL [15]: skipped — %s", e)
             db.rollback_to_savepoint("sp_mig_15")
@@ -313,7 +313,7 @@ def _init_db():
         logger.debug("INIT_DB SQL [16]: %s", _last_sql)
         db.savepoint("sp_mig_16")
         try:
-            db.execute("ALTER TABLE opd_visits ADD COLUMN discount_type TEXT DEFAULT 'None'")
+            db.execute("ALTER TABLE opd_visits ADD COLUMN discount_type VARCHAR(100)")
         except Exception as e:
             logger.debug("INIT_DB SQL [16]: skipped — %s", e)
             db.rollback_to_savepoint("sp_mig_16")
@@ -323,7 +323,12 @@ def _init_db():
         logger.debug("INIT_DB SQL [17]: %s", _last_sql)
         db.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS ix_opd_visits_opd_id ON opd_visits (opd_id)
-            WHERE opd_id IS NOT NULL
+        """)
+
+        _last_sql = "CREATE INDEX IF NOT EXISTS ix_opd_visits_id"
+        logger.debug("INIT_DB SQL [17b]: %s", _last_sql)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS ix_opd_visits_id ON opd_visits (id)
         """)
 
         # --- [18] CREATE users ---
@@ -335,7 +340,7 @@ def _init_db():
                 username        VARCHAR(50) UNIQUE NOT NULL,
                 password_hash   VARCHAR(255) NOT NULL,
                 email           VARCHAR(255) NOT NULL,
-                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at      TIMESTAMP,
                 reset_otp       VARCHAR(10),
                 otp_expiry      TIMESTAMP
             );
@@ -374,17 +379,22 @@ def _init_db():
             logger.debug("INIT_DB SQL [22]: skipped — %s", e)
             db.rollback_to_savepoint("sp_mig_22")
 
+        _last_sql = "CREATE INDEX IF NOT EXISTS ix_users_id"
+        logger.debug("INIT_DB SQL [22b]: %s", _last_sql)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS ix_users_id ON users (id);
+        """)
+
         # --- [23] CREATE calendar_notes ---
         _last_sql = "CREATE TABLE IF NOT EXISTS calendar_notes"
         logger.debug("INIT_DB SQL [23]: %s", _last_sql)
         db.execute("""
             CREATE TABLE IF NOT EXISTS calendar_notes (
                 id              SERIAL PRIMARY KEY,
-                note_date       DATE NOT NULL,
+                note_date       DATE NOT NULL UNIQUE,
                 note_text       TEXT,
-                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at      TIMESTAMP,
-                UNIQUE (note_date)
+                created_at      TIMESTAMP,
+                updated_at      TIMESTAMP
             );
         """)
 
@@ -409,9 +419,15 @@ def _init_db():
                 smtp_password   VARCHAR(255),
                 smtp_server     VARCHAR(255),
                 smtp_port       VARCHAR(10),
-                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at      TIMESTAMP,
                 updated_at      TIMESTAMP
             );
+        """)
+
+        _last_sql = "CREATE INDEX IF NOT EXISTS ix_clinic_settings_id"
+        logger.debug("INIT_DB SQL [24b]: %s", _last_sql)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS ix_clinic_settings_id ON clinic_settings (id);
         """)
 
         # --- [25] CREATE medicines ---
@@ -420,8 +436,7 @@ def _init_db():
         db.execute("""
             CREATE TABLE IF NOT EXISTS medicines (
                 id              SERIAL PRIMARY KEY,
-                name            VARCHAR(255) NOT NULL,
-                UNIQUE (name)
+                name            VARCHAR(255) UNIQUE NOT NULL
             );
         """)
 
@@ -431,8 +446,7 @@ def _init_db():
         db.execute("""
             CREATE TABLE IF NOT EXISTS symptoms_master (
                 id              SERIAL PRIMARY KEY,
-                name            TEXT NOT NULL,
-                UNIQUE (name)
+                name            TEXT UNIQUE NOT NULL
             );
         """)
 
@@ -444,12 +458,18 @@ def _init_db():
                 id              SERIAL PRIMARY KEY,
                 entity_type     VARCHAR(20) NOT NULL,
                 entity_id       VARCHAR(100) NOT NULL,
-                status          VARCHAR(20) DEFAULT 'PENDING',
-                retry_count     INTEGER DEFAULT 0,
+                status          VARCHAR(20),
+                retry_count     INTEGER,
                 last_error      TEXT,
-                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at      TIMESTAMP,
                 last_attempt    TIMESTAMP
             );
+        """)
+
+        _last_sql = "CREATE INDEX IF NOT EXISTS ix_sync_queue_id"
+        logger.debug("INIT_DB SQL [27b]: %s", _last_sql)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS ix_sync_queue_id ON sync_queue (id);
         """)
 
         # --- [28] INSERT INTO users (seed admin) ---
@@ -473,18 +493,11 @@ def _init_db():
             ),
         )
 
-        # --- [29] CREATE INDEX idx_opd_patient ---
-        _last_sql = "CREATE INDEX IF NOT EXISTS idx_opd_patient"
+        # --- [29] CREATE INDEX ix_patients_id ---
+        _last_sql = "CREATE INDEX IF NOT EXISTS ix_patients_id"
         logger.debug("INIT_DB SQL [29]: %s", _last_sql)
         db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_opd_patient ON opd_visits(patient_id);
-        """)
-
-        # --- [30] CREATE INDEX idx_opd_visit ---
-        _last_sql = "CREATE INDEX IF NOT EXISTS idx_opd_visit"
-        logger.debug("INIT_DB SQL [30]: %s", _last_sql)
-        db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_opd_visit ON opd_visits(visit_datetime);
+            CREATE INDEX IF NOT EXISTS ix_patients_id ON patients (id);
         """)
 
         # --- [31] CREATE patient_images ---
@@ -493,33 +506,26 @@ def _init_db():
         db.execute("""
             CREATE TABLE IF NOT EXISTS patient_images (
                 id              SERIAL PRIMARY KEY,
-                patient_id      TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
-                opd_visit_id    TEXT REFERENCES opd_visits(id) ON DELETE SET NULL,
+                patient_id      INTEGER NOT NULL REFERENCES patients(id),
+                opd_visit_id    INTEGER NOT NULL REFERENCES opd_visits(id),
                 file_path       VARCHAR(500) NOT NULL,
-                image_type      VARCHAR(50) DEFAULT NULL,
-                sync_status     VARCHAR(30) DEFAULT 'Pending',
-                uploaded_at     TIMESTAMP DEFAULT NULL,
+                image_type      VARCHAR(50),
+                sync_status     VARCHAR(50),
+                uploaded_at     TIMESTAMP,
                 created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                drive_url       TEXT DEFAULT NULL
+                drive_url       TEXT
             );
         """)
 
-        # --- [32] CREATE INDEX idx_patient_images_patient ---
-        _last_sql = "CREATE INDEX IF NOT EXISTS idx_patient_images_patient"
+        # --- [32] CREATE INDEX ix_patient_images_id ---
+        _last_sql = "CREATE INDEX IF NOT EXISTS ix_patient_images_id"
         logger.debug("INIT_DB SQL [32]: %s", _last_sql)
         db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_patient_images_patient ON patient_images(patient_id);
-        """)
-
-        # --- [33] CREATE INDEX idx_patient_images_opd ---
-        _last_sql = "CREATE INDEX IF NOT EXISTS idx_patient_images_opd"
-        logger.debug("INIT_DB SQL [33]: %s", _last_sql)
-        db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_patient_images_opd ON patient_images(opd_visit_id);
+            CREATE INDEX IF NOT EXISTS ix_patient_images_id ON patient_images (id);
         """)
 
         db.commit()
-        logger.debug("INIT_DB: all 33 statements succeeded, commit OK")
+        logger.debug("INIT_DB: all statements succeeded, commit OK")
         _db_initialized = True
     except Exception as e:
         logger.critical("INIT_DB FAILED at statement: %s", _last_sql)

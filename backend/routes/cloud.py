@@ -2,6 +2,10 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models.patient import Patient
 from models.opd_record import OPDRecord
+from models.calendar_note import CalendarNote
+from models.clinic_setting import ClinicSetting
+from models.medicine import Medicine
+from models.symptom_master import SymptomMaster
 from database import get_db
 from datetime import datetime
 from services.log_service import get_logger
@@ -71,6 +75,38 @@ def upload_changes():
         logger.info("CLOUD DEVICE DEBUG: stored opd id=%s", r['id'])
         _sync_opd_to_google_sheets(r)
 
+    # Sync calendar_notes
+    for note in data.get('calendar_notes', []):
+        try:
+            CalendarNote.upsert(note)
+            logger.info("CLOUD: calendar note for date %s synced", note.get('note_date'))
+        except Exception as e:
+            logger.warning("CLOUD: calendar note sync failed: %s", e)
+
+    # Sync clinic_settings
+    for setting in data.get('clinic_settings', []):
+        try:
+            ClinicSetting.upsert(setting)
+            logger.info("CLOUD: clinic settings synced")
+        except Exception as e:
+            logger.warning("CLOUD: clinic settings sync failed: %s", e)
+
+    # Sync medicines
+    for med in data.get('medicines', []):
+        try:
+            Medicine.upsert(med)
+            logger.info("CLOUD: medicine %s synced", med.get('name'))
+        except Exception as e:
+            logger.warning("CLOUD: medicine sync failed: %s", e)
+
+    # Sync symptoms
+    for sym in data.get('symptoms', []):
+        try:
+            SymptomMaster.upsert(sym)
+            logger.info("CLOUD: symptom %s synced", sym.get('name'))
+        except Exception as e:
+            logger.warning("CLOUD: symptom sync failed: %s", e)
+
     logger.info("CLOUD DEVICE DEBUG: stored patients=%d opd_records=%d",
                 len(results['patients']), len(results['opd_records']))
 
@@ -99,6 +135,10 @@ def download_changes():
 
     patients = Patient.updated_since(last_sync)
     opd_records = OPDRecord.updated_since(last_sync)
+    calendar_notes = CalendarNote.updated_since(last_sync)
+    clinic_settings = ClinicSetting.updated_since(last_sync)
+    medicines = Medicine.all()
+    symptoms = SymptomMaster.all()
 
     logger.info(
         "CLOUD DEVICE DEBUG: download clinic_id=%s device_id=%s last_sync=%s",
@@ -118,6 +158,10 @@ def download_changes():
     return jsonify({
         'patients': patients,
         'opd_records': opd_records,
+        'calendar_notes': calendar_notes,
+        'clinic_settings': clinic_settings,
+        'medicines': medicines,
+        'symptoms': symptoms,
         'server_time': datetime.utcnow().isoformat(),
     }), 200
 
@@ -251,6 +295,34 @@ def sync_cloud_upload():
         results['opd_records'].append(result)
         _sync_opd_to_google_sheets(r)
 
+    # Sync calendar_notes
+    for note in data.get('calendar_notes', []):
+        try:
+            CalendarNote.upsert(note)
+        except Exception as e:
+            logger.warning("Cloud upload: calendar note sync failed: %s", e)
+
+    # Sync clinic_settings
+    for setting in data.get('clinic_settings', []):
+        try:
+            ClinicSetting.upsert(setting)
+        except Exception as e:
+            logger.warning("Cloud upload: clinic settings sync failed: %s", e)
+
+    # Sync medicines
+    for med in data.get('medicines', []):
+        try:
+            Medicine.upsert(med)
+        except Exception as e:
+            logger.warning("Cloud upload: medicine sync failed: %s", e)
+
+    # Sync symptoms
+    for sym in data.get('symptoms', []):
+        try:
+            SymptomMaster.upsert(sym)
+        except Exception as e:
+            logger.warning("Cloud upload: symptom sync failed: %s", e)
+
     logger.info(
         "Cloud upload complete for clinic=%s: %d patients, %d OPDs",
         clinic_id,
@@ -280,6 +352,10 @@ def sync_cloud_download():
 
     patients = Patient.updated_since(last_sync)
     opd_records = OPDRecord.updated_since(last_sync)
+    calendar_notes = CalendarNote.updated_since(last_sync)
+    clinic_settings = ClinicSetting.updated_since(last_sync)
+    medicines = Medicine.all()
+    symptoms = SymptomMaster.all()
 
     logger.info(
         "Cloud download returned patients=%d opd=%d",
@@ -289,6 +365,10 @@ def sync_cloud_download():
     return jsonify({
         'patients': patients,
         'opd_records': opd_records,
+        'calendar_notes': calendar_notes,
+        'clinic_settings': clinic_settings,
+        'medicines': medicines,
+        'symptoms': symptoms,
         'server_time': datetime.utcnow().isoformat(),
     }), 200
 

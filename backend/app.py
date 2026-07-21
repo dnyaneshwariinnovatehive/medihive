@@ -11,6 +11,10 @@ from routes.opd import opd_bp
 from routes.sync import sync_bp
 from routes.whatsapp import whatsapp_bp
 from routes.cloud import cloud_bp, sync_cloud_bp
+from routes.calendar_notes import calendar_notes_bp
+from routes.clinic_settings import clinic_settings_bp
+from routes.medicines import medicines_bp
+from routes.symptoms import symptoms_bp
 
 logger = get_logger(__name__)
 
@@ -32,6 +36,10 @@ def create_app():
     app.register_blueprint(whatsapp_bp, url_prefix='/api/whatsapp')
     app.register_blueprint(cloud_bp, url_prefix='/api/cloud')
     app.register_blueprint(sync_cloud_bp, url_prefix='/api/sync')
+    app.register_blueprint(calendar_notes_bp, url_prefix='/api/calendar-notes')
+    app.register_blueprint(clinic_settings_bp, url_prefix='/api/clinic-settings')
+    app.register_blueprint(medicines_bp, url_prefix='/api/medicines')
+    app.register_blueprint(symptoms_bp, url_prefix='/api/symptoms')
 
     @app.route('/api/health', methods=['GET'])
     def health():
@@ -51,7 +59,7 @@ def create_app():
         db = get_db()
         try:
             rows = db.execute(
-                "SELECT id, username, name, created_at FROM users ORDER BY id"
+                "SELECT id, username, email, created_at FROM users ORDER BY id"
             ).fetchall()
             return {'users': [dict(row) for row in rows]}
         finally:

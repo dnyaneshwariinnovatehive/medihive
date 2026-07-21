@@ -57,6 +57,9 @@ class Patient:
                 values.append(data[k])
         if not fields:
             return Patient.get(patient_id)
+        now = datetime.utcnow().isoformat()
+        fields.append("updated_at = %s")
+        values.append(now)
         values.append(patient_id)
         db = get_db()
         db.execute(f"UPDATE patients SET {', '.join(fields)} WHERE id = %s", values)
@@ -104,7 +107,7 @@ class Patient:
     def updated_since(timestamp):
         db = get_db()
         rows = db.execute(
-            "SELECT * FROM patients WHERE created_at > %s ORDER BY created_at",
+            "SELECT * FROM patients WHERE COALESCE(updated_at, created_at) > %s ORDER BY COALESCE(updated_at, created_at)",
             (timestamp,)
         ).fetchall()
         db.close()

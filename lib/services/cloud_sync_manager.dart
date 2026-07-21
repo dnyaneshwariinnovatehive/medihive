@@ -10,8 +10,11 @@ import 'connectivity_service.dart';
 import '../models/appointment_model.dart';
 import '../repositories/patient_repository.dart';
 import '../repositories/opd_record_repository.dart';
-
 import '../repositories/patient_images_repository.dart';
+import '../repositories/calendar_notes_repository.dart';
+import '../repositories/clinic_settings_repository.dart';
+import '../repositories/medicines_repository.dart';
+import '../repositories/symptoms_master_repository.dart';
 import '../utils/helpers.dart';
 import 'dart:math';
 
@@ -37,8 +40,11 @@ class CloudSyncManager extends ChangeNotifier {
   final ConnectivityService _connectivity = ConnectivityService();
   final PatientRepository _patientRepo = PatientRepository();
   final OpdRecordRepository _opdRepo = OpdRecordRepository();
-
   final PatientImagesRepository _imagesRepo = PatientImagesRepository();
+  final CalendarNotesRepository _calendarNotesRepo = CalendarNotesRepository();
+  final ClinicSettingsRepository _clinicSettingsRepo = ClinicSettingsRepository();
+  final MedicinesRepository _medicinesRepo = MedicinesRepository();
+  final SymptomsMasterRepository _symptomsRepo = SymptomsMasterRepository();
 
   static final CloudSyncManager _instance = CloudSyncManager._internal();
   factory CloudSyncManager() => _instance;
@@ -175,6 +181,10 @@ class CloudSyncManager extends ChangeNotifier {
     final opdRecords = <Map<String, dynamic>>[];
     final appointments = <Map<String, dynamic>>[];
     final deletedEntities = <Map<String, String>>[];
+    final calendarNotes = <Map<String, dynamic>>[];
+    final clinicSettings = <Map<String, dynamic>>[];
+    final medicines = <Map<String, dynamic>>[];
+    final symptoms = <Map<String, dynamic>>[];
 
     try {
       final allPatients = await _patientRepo.getAll();
@@ -205,12 +215,52 @@ class CloudSyncManager extends ChangeNotifier {
       }
     } catch (_) {}
 
-    if (patients.isEmpty && opdRecords.isEmpty && appointments.isEmpty && deletedEntities.isEmpty) {
+    // Build calendar_notes
+    try {
+      final allNotes = await _calendarNotesRepo.getAll();
+      for (final note in allNotes) {
+        calendarNotes.add(Map<String, dynamic>.from(note));
+      }
+    } catch (e) {
+      debugPrint('CLOUD UPLOAD: error reading calendar_notes: $e');
+    }
+
+    // Build clinic_settings
+    try {
+      final settings = await _clinicSettingsRepo.getFirst();
+      if (settings != null) {
+        clinicSettings.add(Map<String, dynamic>.from(settings));
+      }
+    } catch (e) {
+      debugPrint('CLOUD UPLOAD: error reading clinic_settings: $e');
+    }
+
+    // Build medicines
+    try {
+      final allMeds = await _medicinesRepo.getAll();
+      for (final med in allMeds) {
+        medicines.add(Map<String, dynamic>.from(med));
+      }
+    } catch (e) {
+      debugPrint('CLOUD UPLOAD: error reading medicines: $e');
+    }
+
+    // Build symptoms
+    try {
+      final allSyms = await _symptomsRepo.getAll();
+      for (final sym in allSyms) {
+        symptoms.add(Map<String, dynamic>.from(sym));
+      }
+    } catch (e) {
+      debugPrint('CLOUD UPLOAD: error reading symptoms: $e');
+    }
+
+    if (patients.isEmpty && opdRecords.isEmpty && appointments.isEmpty && deletedEntities.isEmpty && calendarNotes.isEmpty && clinicSettings.isEmpty && medicines.isEmpty && symptoms.isEmpty) {
       debugPrint('CLOUD UPLOAD: nothing to upload');
       return;
     }
 
-    debugPrint('CLOUD UPLOAD: patients=${patients.length} opd=${opdRecords.length} appts=${appointments.length}');
+    debugPrint('CLOUD UPLOAD: patients=${patients.length} opd=${opdRecords.length} appts=${appointments.length} calendarNotes=${calendarNotes.length} clinicSettings=${clinicSettings.length} medicines=${medicines.length} symptoms=${symptoms.length}');
     try {
       await ApiService.cloudUpload(
         deviceId: _deviceId!,
@@ -219,6 +269,10 @@ class CloudSyncManager extends ChangeNotifier {
         opdRecords: opdRecords,
         appointments: appointments,
         deletedEntities: deletedEntities,
+        calendarNotes: calendarNotes,
+        clinicSettings: clinicSettings,
+        medicines: medicines,
+        symptoms: symptoms,
       );
       debugPrint('CLOUD UPLOAD: completed');
     } catch (e) {
@@ -256,8 +310,12 @@ class CloudSyncManager extends ChangeNotifier {
     final remoteOpd = response['opd_records'] as List<dynamic>? ?? [];
     final remoteAppts = response['appointments'] as List<dynamic>? ?? [];
     final remoteDeleted = response['deleted_entities'] as List<dynamic>? ?? [];
+    final remoteCalendarNotes = response['calendar_notes'] as List<dynamic>? ?? [];
+    final remoteClinicSettings = response['clinic_settings'] as List<dynamic>? ?? [];
+    final remoteMedicines = response['medicines'] as List<dynamic>? ?? [];
+    final remoteSymptoms = response['symptoms'] as List<dynamic>? ?? [];
 
-    debugPrint('CLOUD DEVICE DEBUG: download patients=${remotePatients.length} opd=${remoteOpd.length} appts=${remoteAppts.length} deleted=${remoteDeleted.length}');
+    debugPrint('CLOUD DEVICE DEBUG: download patients=${remotePatients.length} opd=${remoteOpd.length} appts=${remoteAppts.length} deleted=${remoteDeleted.length} calendarNotes=${remoteCalendarNotes.length} clinicSettings=${remoteClinicSettings.length} medicines=${remoteMedicines.length} symptoms=${remoteSymptoms.length}');
 
     // Apply patients (last-write-wins)
     for (final json in remotePatients) {
@@ -354,6 +412,97 @@ class CloudSyncManager extends ChangeNotifier {
         }
       } catch (e) {
         debugPrint('CLOUD DOWNLOAD: appointment error: $e');
+      }
+    }
+
+    // Apply calendar_notes (last-write-wins)
+    for (final json in remoteCalendarNotes) {
+      try {
+        final map = Map<String, dynamic>.from(json as Map);
+        final noteDate = map['note_date']?.toString() ?? '';
+        if (noteDate.isEmpty) continue;
+
+        final existing = await _calendarNotesRepo.getByDate(noteDate);
+        final remoteUpdatedAt = DateTime.tryParse(map['updated_at']?.toString() ?? '');
+        final localUpdatedAt = DateTime.tryParse(
+          existing?['updated_at'] as String? ?? existing?['created_at'] as String? ?? '',
+        );
+
+        if (existing == null ||
+            (remoteUpdatedAt != null && localUpdatedAt != null && remoteUpdatedAt.isAfter(localUpdatedAt))) {
+          final row = <String, dynamic>{
+            'note_date': noteDate,
+            'note_text': map['note_text']?.toString() ?? '',
+            'created_at': map['created_at']?.toString() ?? DateTime.now().toIso8601String(),
+            'updated_at': map['updated_at']?.toString() ?? DateTime.now().toIso8601String(),
+          };
+          if (existing != null) {
+            await _calendarNotesRepo.updateByDate(noteDate, row);
+          } else {
+            await _calendarNotesRepo.insert(row);
+          }
+          debugPrint('CLOUD DOWNLOAD: pulled calendar note for $noteDate');
+        }
+      } catch (e) {
+        debugPrint('CLOUD DOWNLOAD: calendar note error: $e');
+      }
+    }
+
+    // Apply clinic_settings (singleton, last-write-wins)
+    for (final json in remoteClinicSettings) {
+      try {
+        final map = Map<String, dynamic>.from(json as Map);
+        final existing = await _clinicSettingsRepo.getFirst();
+        final remoteUpdatedAt = DateTime.tryParse(map['updated_at']?.toString() ?? '');
+        final localUpdatedAt = DateTime.tryParse(
+          existing?['updated_at'] as String? ?? existing?['created_at'] as String? ?? '',
+        );
+
+        if (existing == null ||
+            (remoteUpdatedAt != null && localUpdatedAt != null && remoteUpdatedAt.isAfter(localUpdatedAt))) {
+          if (existing != null) {
+            await _clinicSettingsRepo.update(Helpers.toInt(existing['id']), map);
+          } else {
+            await _clinicSettingsRepo.insert(map);
+          }
+          debugPrint('CLOUD DOWNLOAD: pulled clinic settings');
+        }
+      } catch (e) {
+        debugPrint('CLOUD DOWNLOAD: clinic settings error: $e');
+      }
+    }
+
+    // Apply medicines (upsert by name)
+    for (final json in remoteMedicines) {
+      try {
+        final map = Map<String, dynamic>.from(json as Map);
+        final name = map['name']?.toString() ?? '';
+        if (name.isEmpty) continue;
+
+        final existing = await _medicinesRepo.getByName(name);
+        if (existing == null) {
+          await _medicinesRepo.insert({'name': name});
+          debugPrint('CLOUD DOWNLOAD: pulled medicine $name');
+        }
+      } catch (e) {
+        debugPrint('CLOUD DOWNLOAD: medicine error: $e');
+      }
+    }
+
+    // Apply symptoms (upsert by name)
+    for (final json in remoteSymptoms) {
+      try {
+        final map = Map<String, dynamic>.from(json as Map);
+        final name = map['name']?.toString() ?? '';
+        if (name.isEmpty) continue;
+
+        final existing = await _symptomsRepo.getByName(name);
+        if (existing == null) {
+          await _symptomsRepo.insert({'name': name});
+          debugPrint('CLOUD DOWNLOAD: pulled symptom $name');
+        }
+      } catch (e) {
+        debugPrint('CLOUD DOWNLOAD: symptom error: $e');
       }
     }
 
