@@ -19,6 +19,7 @@ import '../repositories/calendar_notes_repository.dart';
 import '../repositories/clinic_settings_repository.dart';
 import '../repositories/medicines_repository.dart';
 import '../repositories/symptoms_master_repository.dart';
+import 'local_notification_service.dart';
 import '../database/database_helper.dart';
 import '../utils/helpers.dart';
 
@@ -716,14 +717,9 @@ class SyncManager extends ChangeNotifier {
         }
       }
     }
-
-    // ── Pull ─────────────────────────────────────────
+    // ── Pull ──
     debugPrint('SYNC PULL START (lastSync=$lastSync)');
 
-    // On first ever sync (fresh install), use epoch default so ALL
-    // existing records are downloaded. The server already defaults
-    // last_sync to 2000-01-01T00:00:00 when empty, but we pass it
-    // explicitly for clarity.
     final pullSync = lastSync.isEmpty ? '2000-01-01T00:00:00' : lastSync;
     try {
       final data = await ApiService.syncPull(pullSync);
@@ -736,6 +732,7 @@ class SyncManager extends ChangeNotifier {
       final remoteClinicSettings = data['clinic_settings'] as List<dynamic>? ?? [];
       final remoteMedicines = data['medicines'] as List<dynamic>? ?? [];
       final remoteSymptoms = data['symptoms'] as List<dynamic>? ?? [];
+      final remotePatientImages = data['patient_images'] as List<dynamic>? ?? [];
 
       for (final json in remotePatients) {
         try {
@@ -793,9 +790,9 @@ class SyncManager extends ChangeNotifier {
                 try {
                   final apptBox = Hive.box<AppointmentModel>('appointments');
                   final patientId = map['patient_id']?.toString() ?? '';
-                final apptId = 'followup_${remoteId}_$nextVisit';
-                if (!apptBox.containsKey(apptId)) {
-                    await apptBox.put(apptId, AppointmentModel(
+                  final apptId = 'followup_${remoteId}_$nextVisit';
+                  if (!apptBox.containsKey(apptId)) {
+                    final appt = AppointmentModel(
                       id: apptId,
                       patientId: patientId,
                       dateTime: visitDate,
@@ -803,8 +800,18 @@ class SyncManager extends ChangeNotifier {
                       isSynced: true,
                       createdAt: DateTime.now(),
                       updatedAt: DateTime.now(),
-                    ));
+                    );
+                    await apptBox.put(apptId, appt);
                     debugPrint('SYNC: created Hive follow-up appointment for OPD $remoteId');
+
+                    // Schedule local OS notification reminder for pulled follow-up
+                    if (visitDate.isAfter(DateTime.now())) {
+                      LocalNotificationService().scheduleAppointmentReminder(
+                        id: apptId,
+                        patientName: 'Patient $patientId',
+                        appointmentTime: visitDate,
+                      );
+                    }
                   }
                 } catch (_) {}
               }
@@ -821,7 +828,17 @@ class SyncManager extends ChangeNotifier {
           final remoteUpdatedAt = DateTime.tryParse(map['updated_at']?.toString() ?? '');
           if (existing == null ||
               (remoteUpdatedAt != null && existing.updatedAt.isBefore(remoteUpdatedAt))) {
-            apptBox.put(map['id'], AppointmentModel.fromJson(map));
+            final appt = AppointmentModel.fromJson(map);
+            apptBox.put(map['id'], appt);
+
+            // Schedule local OS notification reminder for pulled appointment
+            if (appt.dateTime.isAfter(DateTime.now())) {
+              LocalNotificationService().scheduleAppointmentReminder(
+                id: appt.id,
+                patientName: 'Patient ${appt.patientId}',
+                appointmentTime: appt.dateTime,
+              );
+            }
           }
         } catch (_) {}
       }
@@ -917,7 +934,51 @@ class SyncManager extends ChangeNotifier {
         }
       }
 
-      // ── Process deleted entities ────────────────────
+      // ── Process patient_images ──────────────────────
+      for (final json in remotePatientImages) {
+        try {
+          final map = Map<String, dynamic>.from(json as Map);
+          final driveUrl = map['drive_url']?.toString() ?? '';
+          final remoteOpdId = map['opd_visit_id']?.toString() ?? '';
+          final remotePatientSyncId = map['patient_id']?.toString() ?? '';
+          if (driveUrl.isEmpty) continue;
+
+          int localPatientId = 0;
+          if (remotePatientSyncId.isNotEmpty) {
+            final patient = await _patientRepo.getBySyncId(remotePatientSyncId);
+            localPatientId = Helpers.toInt(patient?['id'], _toSqlitePatientId(remotePatientSyncId));
+          }
+
+          int localOpdVisitId = 0;
+          if (remoteOpdId.isNotEmpty) {
+            final opd = await _opdRepo.getByOpdId(remoteOpdId);
+            localOpdVisitId = Helpers.toInt(opd?['id']);
+          }
+
+          final existingImages = await _patientImagesRepo.getByOpdVisitId(localOpdVisitId);
+          final alreadyPresent = existingImages.any(
+            (img) => img['drive_url'] == driveUrl || img['file_path'] == driveUrl,
+          );
+
+          if (!alreadyPresent && localPatientId > 0) {
+            await _patientImagesRepo.insert({
+              'patient_id': localPatientId,
+              'opd_visit_id': localOpdVisitId > 0 ? localOpdVisitId : null,
+              'file_path': driveUrl,
+              'image_type': map['image_type']?.toString() ?? 'opd_attachment',
+              'sync_status': 'synced',
+              'uploaded_at': map['uploaded_at']?.toString() ?? DateTime.now().toIso8601String(),
+              'created_at': map['created_at']?.toString() ?? DateTime.now().toIso8601String(),
+              'drive_url': driveUrl,
+            });
+            debugPrint('SYNC: pulled patient image with Drive URL: $driveUrl');
+          }
+        } catch (e) {
+          debugPrint('SYNC: patient image pull error: $e');
+        }
+      }
+
+      // ── Process deleted entities ──
       final remoteDeleted = data['deleted_entities'] as List<dynamic>? ?? [];
       debugPrint('SYNC processing ${remoteDeleted.length} deleted entities');
       for (final del in remoteDeleted) {

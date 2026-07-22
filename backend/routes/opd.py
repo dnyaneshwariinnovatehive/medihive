@@ -5,8 +5,8 @@ from models.patient import Patient
 from datetime import datetime
 from pathlib import Path
 from config import IMAGE_STORAGE_PATH, GOOGLE_SHEET_ID, IS_CLOUD
-from desktop_google.drive_service import upload_images_to_drive, upload_image_fileobj_to_drive
-from desktop_google.sheets_service import upsert_opd_row_in_sheet, _get_client, _get_opd_worksheet
+from drive_utils import upload_images_to_drive, upload_image_fileobj_to_drive
+from sheets_utils import upsert_opd_row_in_sheet, _get_client, _get_opd_worksheet
 from services.log_service import get_logger
 
 logger = get_logger(__name__)
