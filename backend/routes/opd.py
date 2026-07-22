@@ -202,7 +202,13 @@ def debug_opd_sheet(opd_id):
 def upload_opd_images(opd_id):
     logger.info("Image sync requested for OPD %s", opd_id)
 
-    opd = OPDRecord.get(opd_id)
+    opd = OPDRecord.get_by_opd_id(opd_id)
+    if opd is None:
+        try:
+            opd = OPDRecord.get(int(opd_id))
+        except (ValueError, TypeError):
+            opd = None
+
     if opd is None:
         logger.warning("OPD record not found: %s", opd_id)
         return jsonify({'error': 'OPD record not found'}), 404
@@ -251,7 +257,7 @@ def upload_opd_images(opd_id):
     sheet_update_ok = True
     row_data = build_sheet_row_data(opd, patient, drive_urls)
     try:
-        upsert_opd_row_in_sheet(opd_id, row_data)
+        upsert_opd_row_in_sheet(opd['id'], row_data)
         logger.info("Sheet append complete for OPD %s", opd_id)
     except RuntimeError as e:
         logger.error("Sheet write blocked (no new sheet created): %s", e)

@@ -4,6 +4,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'local_notification_service.dart';
 import 'api_service.dart';
+import 'sync_manager.dart';
 
 class FirebaseMessagingService {
   static final FirebaseMessagingService _instance = FirebaseMessagingService._internal();
@@ -36,6 +37,30 @@ class FirebaseMessagingService {
     _fcmToken = await _messaging?.getToken();
     if (_fcmToken != null) {
       await ApiService.updateFcmToken(_fcmToken!);
+    }
+  }
+
+  Future<void> subscribeToUserTopic(String userId) async {
+    final messaging = _messaging;
+    if (messaging == null) return;
+    try {
+      final topic = 'sync_user_$userId';
+      await messaging.subscribeToTopic(topic);
+      debugPrint('FCM: Subscribed to topic $topic');
+    } catch (e) {
+      debugPrint('FCM: subscribeToTopic error: $e');
+    }
+  }
+
+  Future<void> unsubscribeFromUserTopic(String userId) async {
+    final messaging = _messaging;
+    if (messaging == null) return;
+    try {
+      final topic = 'sync_user_$userId';
+      await messaging.unsubscribeFromTopic(topic);
+      debugPrint('FCM: Unsubscribed from topic $topic');
+    } catch (e) {
+      debugPrint('FCM: unsubscribeFromTopic error: $e');
     }
   }
 
@@ -91,6 +116,11 @@ class FirebaseMessagingService {
   Future<void> _handleMessage(RemoteMessage message) async {
     final notification = message.notification;
     final data = message.data;
+
+    if (data['action'] == 'sync_now' || data['sync'] == 'true') {
+      debugPrint('FCM message: triggering immediate sync');
+      SyncManager().forceSyncNow();
+    }
 
     if (notification != null) {
       await LocalNotificationService().showNotification(

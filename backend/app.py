@@ -42,6 +42,10 @@ def create_app():
     def health():
         return {'status': 'ok', 'version': '1.0.0'}
 
+    @app.route('/api/fcm/token', methods=['POST'])
+    def fcm_token():
+        return {'message': 'ok'}, 200
+
     @app.route('/', methods=['GET'])
     def root():
         return {

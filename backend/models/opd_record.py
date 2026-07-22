@@ -32,6 +32,13 @@ class OPDRecord:
         return OPDRecord.dict_from_row(row)
 
     @staticmethod
+    def get_by_opd_id(opd_id):
+        db = get_db()
+        row = db.execute("SELECT * FROM opd_visits WHERE opd_id = %s", (opd_id,)).fetchone()
+        db.close()
+        return OPDRecord.dict_from_row(row)
+
+    @staticmethod
     def create(data):
         now = datetime.utcnow().isoformat()
         db = get_db()

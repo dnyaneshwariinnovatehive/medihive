@@ -30,11 +30,19 @@ class _PatientManagementScreenState extends State<PatientManagementScreen> {
   Set<String> _datePatientIds = {};
   int _lastPatientCount = -1;
 
+  void _onPatientProviderChanged() {
+    if (mounted) {
+      _loadDateRecords();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<PatientProvider>().loadPatients();
+      final provider = context.read<PatientProvider>();
+      provider.loadPatients();
+      provider.addListener(_onPatientProviderChanged);
       _loadDateRecords();
     });
     _scrollController.addListener(() {
@@ -49,6 +57,9 @@ class _PatientManagementScreenState extends State<PatientManagementScreen> {
 
   @override
   void dispose() {
+    try {
+      context.read<PatientProvider>().removeListener(_onPatientProviderChanged);
+    } catch (_) {}
     _scrollController.dispose();
     super.dispose();
   }
@@ -136,11 +147,6 @@ class _PatientManagementScreenState extends State<PatientManagementScreen> {
   Widget build(BuildContext context) {
     context.watch<SettingsProvider>();
     final provider = context.watch<PatientProvider>();
-    final count = provider.filteredPatients.length;
-    if (count != _lastPatientCount) {
-      _lastPatientCount = count;
-      WidgetsBinding.instance.addPostFrameCallback((_) => _loadDateRecords());
-    }
     final allPatients = provider.filteredPatients;
     final dateFilteredPatients = allPatients.where((p) => _datePatientIds.contains(p.id)).toList();
 

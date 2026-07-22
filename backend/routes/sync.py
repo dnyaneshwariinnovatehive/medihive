@@ -130,6 +130,17 @@ def sync_upload():
         patient = Patient.upsert(p)
         results['patients'].append(patient)
 
+        # Sync all OPD records of this patient to Google Sheet to update patient details there immediately!
+        try:
+            opds = OPDRecord.all(patient_id=patient['id'])
+            for opd in opds:
+                sheet_err = _sync_opd_to_sheets(opd)
+                if sheet_err:
+                    sheet_warnings.append(sheet_err)
+        except Exception as e:
+            logger.warning("Failed to sync patient %s OPDs to sheets: %s", patient['id'], e)
+            sheet_warnings.append(str(e))
+
     # ── OPD Records ──
     for r in data.get('opd_records', []):
         pat_id = r.get('patient_id', '')
@@ -197,6 +208,12 @@ def sync_upload():
         response['temp_ids_mapped'] = temp_id_map
     if sheet_warnings:
         response['sheet_warnings'] = sheet_warnings
+
+    try:
+        from services.fcm_service import notify_data_sync
+        notify_data_sync(user_id)
+    except Exception as exc:
+        logger.warning("FCM sync notification failed: %s", exc)
 
     return jsonify(response), 200
 
@@ -274,7 +291,13 @@ def sync_upload_images(opd_id):
     user_id = get_jwt_identity()
     logger.info("=== IMAGE UPLOAD START === OPD=%s user=%s", opd_id, user_id)
 
-    opd = OPDRecord.get(opd_id)
+    opd = OPDRecord.get_by_opd_id(opd_id)
+    if opd is None:
+        try:
+            opd = OPDRecord.get(int(opd_id))
+        except (ValueError, TypeError):
+            opd = None
+
     if opd is None:
         logger.warning("OPD record not found: %s", opd_id)
         return jsonify({'error': 'OPD record not found'}), 404
@@ -325,7 +348,7 @@ def sync_upload_images(opd_id):
         }), 500
 
     try:
-        PatientImage.save_drive_urls(opd_id, opd.get('patient_id'), drive_urls)
+        PatientImage.save_drive_urls(opd['id'], opd.get('patient_id'), drive_urls)
         logger.info("Saved %d drive URLs to patient_images DB for OPD %s", len(drive_urls), opd_id)
     except Exception as exc:
         logger.warning("Could not save drive URLs to patient_images DB: %s", exc)
@@ -333,7 +356,7 @@ def sync_upload_images(opd_id):
     sheet_update_ok = True
     sheet_error = None
     try:
-        updated_opd = OPDRecord.get(opd_id)
+        updated_opd = OPDRecord.get_by_opd_id(opd_id) or OPDRecord.get(opd['id'])
         sheet_error = _sync_opd_to_sheets(updated_opd, drive_urls)
         if sheet_error:
             logger.error("Sheet update FAILED for OPD %s: %s", opd_id, sheet_error)
@@ -352,6 +375,12 @@ def sync_upload_images(opd_id):
         'images_uploaded': True,
         'sheet_updated': sheet_update_ok,
     }
+
+    try:
+        from services.fcm_service import notify_data_sync
+        notify_data_sync(user_id)
+    except Exception as exc:
+        logger.warning("FCM sync notification failed: %s", exc)
 
     if sheet_update_ok:
         response['message'] = 'Images synced successfully'
