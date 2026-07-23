@@ -109,8 +109,10 @@ class OPDRecord:
         if not fields:
             return OPDRecord.get(record_id)
         now = datetime.utcnow().isoformat()
-        fields.append("updated_at = %s")
-        values.append(now)
+        from database import has_column
+        if has_column('opd_visits', 'updated_at'):
+            fields.append("updated_at = %s")
+            values.append(now)
 
         if isinstance(record_id, int) or (isinstance(record_id, str) and record_id.isdigit()):
             where_clause = "WHERE id = %s"
@@ -162,10 +164,17 @@ class OPDRecord:
     def updated_since(timestamp):
         db = get_db()
         try:
-            rows = db.execute(
-                "SELECT * FROM opd_visits WHERE COALESCE(updated_at, created_at) > %s ORDER BY COALESCE(updated_at, created_at)",
-                (timestamp,)
-            ).fetchall()
+            from database import has_column
+            if has_column('opd_visits', 'updated_at'):
+                rows = db.execute(
+                    "SELECT * FROM opd_visits WHERE COALESCE(updated_at, created_at) > %s ORDER BY COALESCE(updated_at, created_at)",
+                    (timestamp,)
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT * FROM opd_visits WHERE created_at > %s ORDER BY created_at",
+                    (timestamp,)
+                ).fetchall()
             return [OPDRecord.dict_from_row(r) for r in rows]
         finally:
             db.close()

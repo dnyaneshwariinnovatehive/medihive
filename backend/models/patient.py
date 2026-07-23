@@ -114,8 +114,10 @@ class Patient:
         if not fields:
             return Patient.get(pid)
         now = datetime.utcnow().isoformat()
-        fields.append("updated_at = %s")
-        values.append(now)
+        from database import has_column
+        if has_column('patients', 'updated_at'):
+            fields.append("updated_at = %s")
+            values.append(now)
         values.append(str(pid))
         db = get_db()
         try:
@@ -192,10 +194,17 @@ class Patient:
     def updated_since(timestamp):
         db = get_db()
         try:
-            rows = db.execute(
-                "SELECT * FROM patients WHERE COALESCE(updated_at, created_at) > %s ORDER BY COALESCE(updated_at, created_at)",
-                (timestamp,)
-            ).fetchall()
+            from database import has_column
+            if has_column('patients', 'updated_at'):
+                rows = db.execute(
+                    "SELECT * FROM patients WHERE COALESCE(updated_at, created_at) > %s ORDER BY COALESCE(updated_at, created_at)",
+                    (timestamp,)
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT * FROM patients WHERE created_at > %s ORDER BY created_at",
+                    (timestamp,)
+                ).fetchall()
             return [Patient.dict_from_row(r) for r in rows]
         finally:
             db.close()

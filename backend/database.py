@@ -172,6 +172,34 @@ def teardown_db(exception):
         logger.error("Error in teardown_db: %s", e)
 
 
+_column_cache = {}
+
+
+def has_column(table_name, column_name):
+    """Check if a column exists in a PostgreSQL table."""
+    cache_key = (table_name, column_name)
+    if cache_key in _column_cache:
+        return _column_cache[cache_key]
+
+    db = get_db()
+    try:
+        row = db.execute("""
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = %s AND column_name = %s
+            ) AS has_col
+        """, (table_name, column_name)).fetchone()
+        exists = row['has_col'] if row else False
+        _column_cache[cache_key] = exists
+        return exists
+    except Exception as e:
+        logger.warning("Error checking column %s in table %s: %s", column_name, table_name, e)
+        return False
+    finally:
+        db.close()
+
+
 def _init_db():
     """Lazy initialization: called on first get_db() call.
     Creates all database tables if they don't exist and seeds the default admin user.
