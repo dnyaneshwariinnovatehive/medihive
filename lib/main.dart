@@ -18,13 +18,13 @@ import 'providers/appointment_provider.dart';
 import 'providers/settings_provider.dart';
 import 'providers/notification_provider.dart';
 import 'services/sync_manager.dart';
-import 'services/cloud_sync_manager.dart';
 import 'services/local_notification_service.dart';
 import 'services/notification_service.dart';
 import 'services/firebase_messaging_service.dart';
 import 'services/background_backup_handler.dart';
 import 'services/data_migration_service.dart';
 import 'database/database_helper.dart';
+import 'repositories/sync_metadata_repository.dart';
 
 import 'models/appointment_model.dart';
 
@@ -54,58 +54,45 @@ void main() async {
 
   print('MAIN START');
 
-  try {
-    print('CREATING SYNCMANAGER');
-    SyncManager();
-    print('SYNCMANAGER CREATED');
-  } catch (e, st) {
-    print('SYNCMANAGER FAILED: $e');
-    print(st);
-  }
-
   await dotenv.load(fileName: "assets/.env");
-
-  // Start cloud sync manager (runs in background, polls every 20s)
-  if (!kIsWeb) {
-    try {
-      CloudSyncManager().start();
-    } catch (e) {
-      debugPrint('CloudSyncManager start failed: $e');
-    }
-  }
 
   ErrorWidget.builder = (FlutterErrorDetails details) {
     return MaterialApp(
       home: Scaffold(
-        body: Center(child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.error_outline, size: 64, color: Colors.red),
-            const SizedBox(height: 16),
-            const Text('Something went wrong',
-              style: TextStyle(fontSize: 18, 
-                fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(details.summary.toString(),
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12, color: Colors.grey))),
-            ElevatedButton(
-              onPressed: () => SystemNavigator.pop(),
-              child: const Text('Restart App'))
-          ]
-        ))
-      )
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, size: 64, color: Colors.red),
+              const SizedBox(height: 16),
+              const Text(
+                'Something went wrong',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  details.summary.toString(),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ),
+              ElevatedButton(
+                onPressed: () => SystemNavigator.pop(),
+                child: const Text('Restart App'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   };
-  
+
   // Initialize Workmanager - only on non‑web platforms
   if (!kIsWeb) {
     try {
-      await Workmanager().initialize(
-        callbackDispatcher,
-      );
+      await Workmanager().initialize(callbackDispatcher);
     } catch (e) {
       debugPrint('main: Workmanager init failed: $e');
     }
@@ -121,50 +108,50 @@ void main() async {
   // Initialize Hive
   try {
     await Hive.initFlutter();
-    
+
     // Register adapters
     Hive.registerAdapter(AppointmentModelAdapter());
-    
+
     // Open boxes
     await Hive.openBox<AppointmentModel>('appointments');
     await Hive.openBox('drafts');
     await Hive.openBox('day_notes');
     await Hive.openBox('opd_documents');
+    await SyncMetadataRepository().ensureReady();
+  } catch (e) {
+    // Hive initialization failure - log and continue with best-effort
+    debugPrint('Hive initialization error: $e');
+  }
+
+  // Initialize SQLite database
+  if (!kIsWeb) {
+    try {
+      await DatabaseHelper().database;
+      debugPrint('SQLite database initialized successfully');
     } catch (e) {
-      // Hive initialization failure - log and continue with best-effort
-      debugPrint('Hive initialization error: $e');
+      debugPrint('SQLite initialization error: $e');
     }
+  }
 
-    // Initialize SQLite database
-    if (!kIsWeb) {
-      try {
-        await DatabaseHelper().database;
-        debugPrint('SQLite database initialized successfully');
-      } catch (e) {
-        debugPrint('SQLite initialization error: $e');
-      }
+  // One-time Hive → SQLite migration
+  final startupPrefs = await SharedPreferences.getInstance();
+  if (!kIsWeb && startupPrefs.getBool('hive_sqlite_migration_done') != true) {
+    try {
+      final result = await DataMigrationService().migrate();
+      debugPrint('Migration complete: ${result.totalSqlite} rows migrated');
+    } catch (e) {
+      debugPrint('Migration error: $e');
     }
+  }
 
-    // One-time Hive → SQLite migration
-    final startupPrefs = await SharedPreferences.getInstance();
-    if (!kIsWeb && startupPrefs.getBool('hive_sqlite_migration_done') != true) {
-      try {
-        final result = await DataMigrationService().migrate();
-        debugPrint('Migration complete: ${result.totalSqlite} rows migrated');
-      } catch (e) {
-        debugPrint('Migration error: $e');
-      }
-    }
+  // Keep the incremental sync cursor. Replaying the entire server history
+  // at every startup lets stale devices overwrite newer data.
+  // Keep successful sync cursors between app launches.
+  debugPrint(
+    'MAIN: sync timestamps cleared — next sync will download all cloud data',
+  );
 
-    // Clear stale sync timestamps on every startup. This ensures that
-    // even if Android auto-backup restored old SharedPreferences (before
-    // allowBackup=false took effect), the next cloud sync will download
-    // from epoch and overwrite any restored local data via last-write-wins.
-    await startupPrefs.remove('last_cloud_sync');
-    await startupPrefs.remove('last_flask_sync');
-    debugPrint('MAIN: sync timestamps cleared — next sync will download all cloud data');
-
-    // Initialize local notification services
+  // Initialize local notification services
   if (!kIsWeb) {
     try {
       await LocalNotificationService().init();
@@ -179,7 +166,9 @@ void main() async {
     try {
       print('CREATING SYNCMANAGER');
       final syncManager = SyncManager();
-      await syncManager.scheduleDailyBackup(const TimeOfDay(hour: 2, minute: 0));
+      await syncManager.scheduleDailyBackup(
+        const TimeOfDay(hour: 2, minute: 0),
+      );
     } catch (e) {
       debugPrint('main: scheduleDailyBackup failed: $e');
     }
@@ -213,10 +202,12 @@ class MediHiveApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => OpdProvider()),
         ChangeNotifierProvider(create: (_) => AppointmentProvider()),
         ChangeNotifierProvider(create: (_) => SettingsProvider()),
-        ChangeNotifierProvider(create: (_) {
-          print('CREATING SYNCMANAGER');
-          return SyncManager();
-        }),
+        ChangeNotifierProvider(
+          create: (_) {
+            print('CREATING SYNCMANAGER');
+            return SyncManager();
+          },
+        ),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
       ],
       child: Consumer<SettingsProvider>(
@@ -244,7 +235,9 @@ class MediHiveApp extends StatelessWidget {
 // GoRouter Configuration — mirrors React Router routes exactly
 // ═══════════════════════════════════════════════════════════════
 
-final GlobalKey<NavigatorState> _rootNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'root');
+final GlobalKey<NavigatorState> _rootNavigatorKey = GlobalKey<NavigatorState>(
+  debugLabel: 'root',
+);
 
 final _router = GoRouter(
   navigatorKey: _rootNavigatorKey,
@@ -259,7 +252,11 @@ final _router = GoRouter(
       return '/';
     }
 
-    if (auth.hasLoadedCredentials && !auth.isAuthenticated && !isGoingToLogin && !isGoingToSplash && !isGoingTo2FA) {
+    if (auth.hasLoadedCredentials &&
+        !auth.isAuthenticated &&
+        !isGoingToLogin &&
+        !isGoingToSplash &&
+        !isGoingTo2FA) {
       return '/login';
     }
 
@@ -267,7 +264,9 @@ final _router = GoRouter(
       return '/2fa-verify';
     }
 
-    if (!auth.needs2FA && auth.isAuthenticated && (isGoingToLogin || isGoingToSplash || isGoingTo2FA)) {
+    if (!auth.needs2FA &&
+        auth.isAuthenticated &&
+        (isGoingToLogin || isGoingToSplash || isGoingTo2FA)) {
       return '/app';
     }
 
@@ -275,16 +274,10 @@ final _router = GoRouter(
   },
   routes: [
     // Splash → /
-    GoRoute(
-      path: '/',
-      builder: (context, state) => const SplashScreen(),
-    ),
+    GoRoute(path: '/', builder: (context, state) => const SplashScreen()),
 
     // Login → /login
-    GoRoute(
-      path: '/login',
-      builder: (context, state) => const LoginScreen(),
-    ),
+    GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
 
     // Forgot Password → /forgot-password
     GoRoute(
@@ -409,22 +402,14 @@ final _router = GoRouter(
     // Standalone routes (outside bottom nav)
     GoRoute(
       path: '/app/prescription/:id',
-      builder: (context, state) => PrescriptionScreen(
-        patientId: state.pathParameters['id'] ?? '',
-      ),
+      builder: (context, state) =>
+          PrescriptionScreen(patientId: state.pathParameters['id'] ?? ''),
     ),
-    GoRoute(
-      path: '/app/backup',
-      builder: (context, state) => BackupScreen(),
-    ),
+    GoRoute(path: '/app/backup', builder: (context, state) => BackupScreen()),
     GoRoute(
       path: '/app/authentication',
       builder: (context, state) => AuthSettingsScreen(),
     ),
-    GoRoute(
-      path: '/app/help',
-      builder: (context, state) => HelpCenterScreen(),
-    ),
+    GoRoute(path: '/app/help', builder: (context, state) => HelpCenterScreen()),
   ],
 );
-

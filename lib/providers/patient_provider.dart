@@ -337,13 +337,7 @@ class PatientProvider extends ChangeNotifier {
     } catch (_) {}
   }
 
-  int _toSqliteId(String hiveId) {
-    final match = RegExp(r'(\d+)').firstMatch(hiveId);
-    if (match != null) {
-      return int.tryParse(match.group(1)!) ?? 0;
-    }
-    return 0;
-  }
+
 
   String _toStringId(int sqliteId) {
     return 'P${sqliteId.toString().padLeft(3, '0')}';

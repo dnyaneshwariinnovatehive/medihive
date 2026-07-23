@@ -558,6 +558,7 @@ class _OpdRegistrationScreenState extends State<OpdRegistrationScreen> {
                                     'OPD SAVE: editPatientId is null/empty — will CREATE new OPD');
                               }
                               print('OPD SAVE: existingId=$existingId');
+                              if (!context.mounted) return;
                               final success = await opd.submitRecord(
                                 dashboardProvider: context
                                     .read<DashboardProvider>(),
@@ -578,10 +579,12 @@ class _OpdRegistrationScreenState extends State<OpdRegistrationScreen> {
                                 }
                                 return;
                               }
-                              context.read<NotificationProvider>().addNotification(
-                                'OPD Record Saved',
-                                'Patient $patientNameForNotification record saved',
-                              );
+                              if (context.mounted) {
+                                context.read<NotificationProvider>().addNotification(
+                                  'OPD Record Saved',
+                                  'Patient $patientNameForNotification record saved',
+                                );
+                              }
                             } catch (e) {
                               setState(() => _isSubmitting = false);
                               if (context.mounted) {
@@ -595,6 +598,7 @@ class _OpdRegistrationScreenState extends State<OpdRegistrationScreen> {
                               rethrow;
                             }
 
+                            if (!context.mounted) return;
                             showGeneralDialog(
                               context: context,
                               barrierColor: Colors.black.withValues(
@@ -1620,8 +1624,9 @@ class _OpdRegistrationScreenState extends State<OpdRegistrationScreen> {
             isRequired: true,
             validator: (value) {
               if (value == null || value.trim().isEmpty) return 'Required';
-              if (double.tryParse(value.trim()) == null)
+              if (double.tryParse(value.trim()) == null) {
                 return 'Must be a valid number';
+              }
               return null;
             },
           ),

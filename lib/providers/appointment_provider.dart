@@ -7,7 +7,6 @@ import '../models/appointment.dart';
 import '../models/appointment_model.dart';
 import '../repositories/calendar_notes_repository.dart';
 import '../repositories/patient_repository.dart';
-import '../repositories/opd_record_repository.dart';
 import 'notification_provider.dart';
 import '../services/daily_summary_service.dart';
 import '../services/sync_manager.dart';
@@ -73,7 +72,6 @@ class AppointmentProvider extends ChangeNotifier {
   AppointmentProvider() {
     _loadFromHive();
     _loadNotes();
-    _refreshHasRealData();
     _apptSubscription = Hive.box<AppointmentModel>('appointments').watch().listen((_) {
       _requestReload();
     });
@@ -134,21 +132,6 @@ class AppointmentProvider extends ChangeNotifier {
           a.dateTime.month == _currentDate.month &&
           a.dateTime.year == _currentDate.year,
       ).toList();
-
-  bool _hasRealDataCached = false;
-
-  Future<void> _refreshHasRealData() async {
-    try {
-      final patientCount = await PatientRepository().count();
-      final opdCount = await OpdRecordRepository().count();
-      final apptCount = Hive.box<AppointmentModel>('appointments').length;
-      _hasRealDataCached = patientCount > 0 || opdCount > 0 || apptCount > 0;
-    } catch (_) {
-      _hasRealDataCached = false;
-    }
-  }
-
-  bool get _hasRealData => _hasRealDataCached;
 
   List<Appointment> get upcomingFollowUps {
     final now = DateTime.now();

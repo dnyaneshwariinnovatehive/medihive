@@ -1,9 +1,16 @@
 import 'package:flutter/foundation.dart';
-import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:sqflite/sqflite.dart';
+
+import '../repositories/sync_metadata_repository.dart';
 import 'schema.dart';
 
+/// Opens the clinic database using the exact schema in `clinic (1).db`.
+///
+/// Synchronization state deliberately lives outside this database.  It is
+/// stored in Hive by [SyncMetadataRepository], which lets a clinic database be
+/// exchanged with the reference application without schema changes.
 class DatabaseHelper {
   static final DatabaseHelper _instance = DatabaseHelper._internal();
   factory DatabaseHelper() => _instance;
@@ -26,7 +33,7 @@ class DatabaseHelper {
     final dbPath = p.join(appDir.path, 'medihive.db');
     debugPrint('DATABASE PATH: $dbPath');
 
-    return await openDatabase(
+    return openDatabase(
       dbPath,
       version: databaseVersion,
       onCreate: _onCreate,
@@ -40,291 +47,312 @@ class DatabaseHelper {
   }
 
   Future<void> _onCreate(Database db, int version) async {
-    for (final stmt in createStatements) {
-      await db.execute(stmt);
+    for (final statement in createStatements) {
+      await db.execute(statement);
     }
-
-    debugPrint('SQLite database created. Version: $version');
+    debugPrint('Created source-contract SQLite database. Version: $version');
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    debugPrint('SQLite migration: $oldVersion → $newVersion');
+    // A single reconstruction is safer than applying historical migrations
+    // that created columns which are absent from the source-of-truth database.
+    await _migrateToSourceContract(db, oldVersion, newVersion);
+  }
 
-    for (int v = oldVersion + 1; v <= newVersion; v++) {
-      await _applyMigration(db, v);
+  Future<bool> _tableExists(Database db, String table) async {
+    final result = await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      [table],
+    );
+    return result.isNotEmpty;
+  }
+
+  Future<Set<String>> _columns(Database db, String table) async {
+    final rows = await db.rawQuery('PRAGMA table_info($table)');
+    return rows.map((row) => row['name']?.toString() ?? '').toSet();
+  }
+
+  Future<List<Map<String, dynamic>>> _legacyRows(
+    Database db,
+    String table,
+    List<String> columns,
+  ) async {
+    if (!await _tableExists(db, table)) return const [];
+    final present = await _columns(db, table);
+    final selected = columns.where(present.contains).toList();
+    if (selected.isEmpty) return const [];
+    return db.query(table, columns: selected);
+  }
+
+  Future<void> _preserveLegacySyncMetadata(Database db) async {
+    try {
+      final metadata = SyncMetadataRepository();
+      await metadata.ensureReady();
+      await metadata.migrateLegacyPatients(
+        await _legacyRows(db, tablePatients, const [
+          'id',
+          'sync_id',
+          'updated_at',
+        ]),
+      );
+      await metadata.migrateLegacyOpdRecords(
+        await _legacyRows(db, tableOpdVisits, const ['opd_id', 'updated_at']),
+      );
+    } catch (error) {
+      // The source rows remain intact even if Hive cannot be opened.  The
+      // caller can safely retry after app startup completes.
+      debugPrint('Could not preserve legacy sync metadata: $error');
     }
   }
 
-  Future<void> _applyMigration(Database db, int targetVersion) async {
-    switch (targetVersion) {
-      case 2:
-        await db.execute("ALTER TABLE patients ADD COLUMN updated_at DATETIME");
-        await db.execute("ALTER TABLE opd_visits ADD COLUMN updated_at DATETIME");
-        debugPrint('Applied migration v2: added updated_at to patients and opd_visits');
-        break;
-      case 3:
-        await db.execute("ALTER TABLE patients ADD COLUMN sync_id TEXT");
-        await db.execute("CREATE INDEX ix_patients_sync_id ON patients (sync_id)");
-        await db.execute("UPDATE patients SET sync_id = 'P' || SUBSTR('000' || CAST(id AS TEXT), -3, 3) WHERE sync_id IS NULL");
-        await db.execute("ALTER TABLE sync_queue ADD COLUMN operation TEXT DEFAULT 'upsert'");
-        debugPrint('Applied migration v3: added sync_id to patients and operation to sync_queue');
-        break;
-      case 4:
-        debugPrint('Applied migration v4: skipped (tables removed to match SQLite baseline)');
-        break;
-      case 5:
-        await db.execute("ALTER TABLE calendar_notes RENAME TO temp_calendar_notes");
-        await db.execute(createCalendarNotesTable);
-        try {
-          await db.execute('''
-            INSERT INTO calendar_notes (note_date, note_text, created_at, updated_at)
-            SELECT note_date, note_text, created_at, updated_at FROM temp_calendar_notes
-          ''');
-        } catch (_) {}
-        await db.execute("DROP TABLE temp_calendar_notes");
-        debugPrint('Applied migration v5: updated calendar_notes schema');
-        break;
-      case 6:
-        try { await db.execute("DROP INDEX IF EXISTS ix_opd_visits_opd_id"); } catch (_) {}
-        try { await db.execute("DROP INDEX IF EXISTS ix_opd_visits_id"); } catch (_) {}
-        await db.execute("ALTER TABLE opd_visits RENAME TO temp_opd_visits");
-        await db.execute(createOpdVisitsTable);
-        try {
-          await db.execute('''
-            INSERT INTO opd_visits (
-              id, opd_id, patient_id, visit_datetime, opd_type, charge_type,
-              diagnosis, symptoms, clinical_notes, consultation_fee, medicine_fee,
-              panchakarma_fee, total_fee, discount_type, discount_value, payment_mode,
-              next_visit_date, followup_status, created_at, medicines, panchakarma_notes
-            )
-            SELECT 
-              id, opd_id, patient_id, visit_datetime, opd_type, charge_type,
-              diagnosis, symptoms, clinical_notes, consultation_fee, medicine_fee,
-              panchakarma_fee, total_fee, discount_type, discount_value, payment_mode,
-              next_visit_date, followup_status, created_at, medicines, panchakarma_notes
-            FROM temp_opd_visits
-          ''');
-        } catch (_) {}
-        await db.execute("DROP TABLE temp_opd_visits");
-        try { await db.execute(createixOpdVisitsId); } catch (_) {}
-        try { await db.execute(createixOpdVisitsOpdId); } catch (_) {}
-        debugPrint('Applied migration v6: updated opd_visits schema, removed updated_at');
-        break;
-      case 7:
-        await _applyMigrationV7(db);
-        break;
-      case 8:
-        try {
-          await db.execute(createPatientImagesTable);
-          await db.execute(createixPatientImagesId);
-        } catch (_) {}
-        debugPrint('Applied migration v8: created patient_images table');
-        break;
-      case 9:
-        try {
-          await db.execute("ALTER TABLE patients RENAME TO temp_patients");
-          await db.execute(createPatientsTable);
-          try {
-            await db.execute('''
-              INSERT INTO patients (
-                id, full_name, mobile_number, alternate_mobile,
-                gender, dob, age, blood_group, address, created_at, sync_id
-              )
-              SELECT
-                id, full_name, mobile_number, alternate_mobile,
-                gender, dob, age, blood_group, address, created_at, sync_id
-              FROM temp_patients
-            ''');
-          } catch (e) {
-            debugPrint('Migration v9 patients copy failed: \$e');
-          }
-          await db.execute("DROP TABLE temp_patients");
-          try { await db.execute(createixPatientsId); } catch (_) {}
-          try { await db.execute(createixPatientsSyncId); } catch (_) {}
-        } catch (_) {}
-        debugPrint('Applied migration v9: recreated patients table with updated schema');
-        break;
-      case 10:
-        try {
-          // 1. calendar_notes
-          try { await db.execute("ALTER TABLE calendar_notes RENAME TO temp_calendar_notes"); } catch (_) {}
-          await db.execute(createCalendarNotesTable);
-          try {
-            await db.execute('''
-              INSERT INTO calendar_notes (id, note_date, note_text, created_at, updated_at)
-              SELECT id, note_date, note_text, created_at, updated_at FROM temp_calendar_notes
-            ''');
-          } catch (e) {
-            debugPrint('Migration v10 calendar_notes copy failed: \$e');
-          }
-          try { await db.execute("DROP TABLE temp_calendar_notes"); } catch (_) {}
+  Future<void> _copyCommonColumns(
+    Database db, {
+    required String from,
+    required String to,
+    required List<String> sourceColumns,
+    String? where,
+  }) async {
+    final legacyColumns = await _columns(db, from);
+    final columns = sourceColumns.where(legacyColumns.contains).toList();
+    if (columns.isEmpty) return;
+    final names = columns.join(', ');
+    await db.execute(
+      'INSERT INTO $to ($names) SELECT $names FROM $from${where == null ? '' : ' WHERE $where'}',
+    );
+  }
 
-          // 2. clinic_settings
-          try { await db.execute("ALTER TABLE clinic_settings RENAME TO temp_clinic_settings"); } catch (_) {}
-          await db.execute(createClinicSettingsTable);
-          try {
-            await db.execute('''
-              INSERT INTO clinic_settings (
-                id, doctor_name, doctor_email, doctor_contact, doctor_license_no, doctor_photo_path,
-                clinic_name, clinic_logo_path, clinic_address, clinic_phone, website, operating_hours,
-                smtp_email, smtp_password, smtp_server, smtp_port, created_at, updated_at
-              )
-              SELECT
-                id, doctor_name, doctor_email, doctor_contact, doctor_license_no, doctor_photo_path,
-                clinic_name, clinic_logo_path, clinic_address, clinic_phone, website, operating_hours,
-                smtp_email, smtp_password, smtp_server, smtp_port, created_at, updated_at
-              FROM temp_clinic_settings
-            ''');
-          } catch (e) {
-            debugPrint('Migration v10 clinic_settings copy failed: \$e');
-          }
-          try { await db.execute("DROP TABLE temp_clinic_settings"); } catch (_) {}
-          try { await db.execute(createixClinicSettingsId); } catch (_) {}
+  String _canonicalQueueEntityType(Map<String, dynamic> row) {
+    final rawType = row['entity_type']?.toString().trim() ?? '';
+    final operation = row['operation']?.toString().trim().toLowerCase() ?? '';
+    final normalized = rawType.toUpperCase();
+    if (normalized == 'PATIENT' || normalized == 'PATIENTS') {
+      return operation == 'delete' ? 'PATIENT_DELETE' : 'PATIENT_UPDATE';
+    }
+    if (normalized == 'OPD_VISIT' ||
+        normalized == 'OPD_VISITS' ||
+        normalized == 'OPD') {
+      return operation == 'delete' ? 'OPD_DELETE' : 'OPD_UPDATE';
+    }
+    return normalized.isEmpty ? 'OPD_UPDATE' : normalized;
+  }
 
-          // 3. medicines
-          try { await db.execute("ALTER TABLE medicines RENAME TO temp_medicines"); } catch (_) {}
-          await db.execute(createMedicinesTable);
-          try {
-            await db.execute('''
-              INSERT INTO medicines (id, name)
-              SELECT id, name FROM temp_medicines
-            ''');
-          } catch (e) {
-            debugPrint('Migration v10 medicines copy failed: \$e');
-          }
-          try { await db.execute("DROP TABLE temp_medicines"); } catch (_) {}
-
-          // 4. symptoms_master
-          try { await db.execute("ALTER TABLE symptoms_master RENAME TO temp_symptoms_master"); } catch (_) {}
-          await db.execute(createSymptomsMasterTable);
-          try {
-            await db.execute('''
-              INSERT INTO symptoms_master (id, name)
-              SELECT id, name FROM temp_symptoms_master
-            ''');
-          } catch (e) {
-            debugPrint('Migration v10 symptoms_master copy failed: \$e');
-          }
-          try { await db.execute("DROP TABLE temp_symptoms_master"); } catch (_) {}
-
-          // 5. sync_queue
-          try { await db.execute("ALTER TABLE sync_queue RENAME TO temp_sync_queue"); } catch (_) {}
-          await db.execute(createSyncQueueTable);
-          try {
-            await db.execute('''
-              INSERT INTO sync_queue (
-                id, entity_type, entity_id, operation, status, retry_count, last_error, created_at, last_attempt
-              )
-              SELECT
-                id, entity_type, entity_id, operation, status, COALESCE(retry_count, 0), last_error, created_at, last_attempt
-              FROM temp_sync_queue
-            ''');
-          } catch (e) {
-            debugPrint('Migration v10 sync_queue copy failed: \$e');
-          }
-          try { await db.execute("DROP TABLE temp_sync_queue"); } catch (_) {}
-          try { await db.execute(createixSyncQueueId); } catch (_) {}
-
-          // 6. users
-          try { await db.execute("ALTER TABLE users RENAME TO temp_users"); } catch (_) {}
-          await db.execute(createUsersTable);
-          try {
-            await db.execute('''
-              INSERT INTO users (id, username, password_hash, email, created_at, reset_otp, otp_expiry)
-              SELECT id, username, password_hash, email, created_at, reset_otp, otp_expiry FROM temp_users
-            ''');
-          } catch (e) {
-            debugPrint('Migration v10 users copy failed: \$e');
-          }
-          try { await db.execute("DROP TABLE temp_users"); } catch (_) {}
-          try { await db.execute(createixUsersId); } catch (_) {}
-        } catch (_) {}
-        debugPrint('Applied migration v10: updated schemas for calendar_notes, clinic_settings, medicines, symptoms_master, sync_queue, users');
-        break;
-      case 11:
-        try {
-          await db.execute("ALTER TABLE patients ADD COLUMN sync_id TEXT");
-        } catch (_) {}
-        debugPrint('Applied migration v11: ensured sync_id column exists');
-        break;
-      case 12:
-        // Ensure all core tables exist
-        try { await db.execute(createPatientsTable); } catch (_) {}
-        try { await db.execute(createOpdVisitsTable); } catch (_) {}
-        try { await db.execute(createCalendarNotesTable); } catch (_) {}
-        try { await db.execute(createClinicSettingsTable); } catch (_) {}
-        try { await db.execute(createUsersTable); } catch (_) {}
-        try { await db.execute(createMedicinesTable); } catch (_) {}
-        try { await db.execute(createSymptomsMasterTable); } catch (_) {}
-        try { await db.execute(createPatientImagesTable); } catch (_) {}
-        try { await db.execute(createSyncQueueTable); } catch (_) {}
-        try { await db.execute(createixPatientsId); } catch (_) {}
-        try { await db.execute(createixPatientsSyncId); } catch (_) {}
-        try { await db.execute(createixOpdVisitsId); } catch (_) {}
-        try { await db.execute(createixOpdVisitsOpdId); } catch (_) {}
-        try { await db.execute(createixPatientImagesId); } catch (_) {}
-        try { await db.execute(createixSyncQueueId); } catch (_) {}
-        try { await db.execute(createixUsersId); } catch (_) {}
-        try { await db.execute(createixClinicSettingsId); } catch (_) {}
-        debugPrint('Applied migration v12: ensured all core tables and indexes exist');
-        break;
-      default:
-        debugPrint('No migration defined for version $targetVersion');
+  Future<void> _copyQueue(Database db, String legacyTable) async {
+    final rows = await db.query(legacyTable);
+    for (final row in rows) {
+      await db.insert(tableSyncQueue, {
+        if (row['id'] != null) 'id': row['id'],
+        'entity_type': _canonicalQueueEntityType(row),
+        'entity_id': row['entity_id']?.toString() ?? '',
+        'status': row['status']?.toString().toUpperCase(),
+        'retry_count': row['retry_count'],
+        'last_error': row['last_error'],
+        'created_at': row['created_at'],
+        'last_attempt': row['last_attempt'],
+      });
     }
   }
 
-  Future<void> _applyMigrationV7(Database db) async {
-    try { await db.execute("DROP INDEX IF EXISTS ix_opd_visits_opd_id"); } catch (_) {}
-    try { await db.execute("DROP INDEX IF EXISTS ix_opd_visits_id"); } catch (_) {}
+  Future<void> _migrateToSourceContract(
+    Database db,
+    int oldVersion,
+    int newVersion,
+  ) async {
+    debugPrint(
+      'SQLite migration: $oldVersion -> $newVersion (source contract)',
+    );
+    await _preserveLegacySyncMetadata(db);
 
-    await db.execute("ALTER TABLE opd_visits RENAME TO temp_opd_visits");
-    await db.execute(createOpdVisitsTable);
-    try {
-      await db.execute('''
-        INSERT INTO opd_visits (
-          id, opd_id, patient_id, visit_datetime, opd_type, charge_type,
-          diagnosis, symptoms, clinical_notes, consultation_fee, medicine_fee,
-          panchakarma_fee, total_fee, discount_type, discount_value, payment_mode,
-          next_visit_date, followup_status, created_at, medicines, panchakarma_notes
-        )
-        SELECT
-          id, opd_id, patient_id, visit_datetime, opd_type, charge_type,
-          diagnosis, symptoms, clinical_notes, consultation_fee, medicine_fee,
-          panchakarma_fee, total_fee, discount_type, discount_value, payment_mode,
-          next_visit_date, followup_status, created_at, medicines, panchakarma_notes
-        FROM temp_opd_visits
-      ''');
-    } catch (e) {
-      debugPrint('Migration v7 opd_visits copy failed: $e');
-    }
-    await db.execute("DROP TABLE temp_opd_visits");
-    try { await db.execute(createixOpdVisitsId); } catch (_) {}
-    try { await db.execute(createixOpdVisitsOpdId); } catch (_) {}
+    final tables = <String>[
+      tablePatients,
+      tableOpdVisits,
+      tableCalendarNotes,
+      tableClinicSettings,
+      tableUsers,
+      tableMedicines,
+      tableSymptomsMaster,
+      tablePatientImages,
+      tableSyncQueue,
+    ];
+    final legacyNames = <String, String>{};
 
+    await db.execute('PRAGMA foreign_keys = OFF');
     try {
-      await db.execute("ALTER TABLE calendar_notes RENAME TO temp_calendar_notes");
-      await db.execute(createCalendarNotesTable);
-      try {
-        await db.execute('''
-          INSERT INTO calendar_notes (id, note_date, note_text, created_at, updated_at)
-          SELECT id, note_date, note_text, created_at, updated_at
-          FROM temp_calendar_notes
-        ''');
-      } catch (e) {
-        debugPrint('Migration v7 calendar_notes copy failed: $e');
+      for (final table in tables) {
+        if (await _tableExists(db, table)) {
+          final indexRows = await db.rawQuery(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND name NOT LIKE 'sqlite\\_autoindex\\_%' ESCAPE '\\'",
+            [table],
+          );
+          for (final row in indexRows) {
+            await db.execute('DROP INDEX IF EXISTS "${row['name']}"');
+          }
+
+          final legacy = '${table}_pre_source_v13';
+          if (await _tableExists(db, legacy)) {
+            await db.execute('DROP TABLE $legacy');
+          }
+          await db.execute('ALTER TABLE $table RENAME TO $legacy');
+          legacyNames[table] = legacy;
+        }
       }
-      await db.execute("DROP TABLE temp_calendar_notes");
-    } catch (_) {}
 
-    debugPrint('Applied migration v7: updated schemas, removed clinic_id columns');
+      for (final statement in createStatements) {
+        await db.execute(statement);
+      }
+
+      final patients = legacyNames[tablePatients];
+      if (patients != null) {
+        await _copyCommonColumns(
+          db,
+          from: patients,
+          to: tablePatients,
+          sourceColumns: const [
+            'id',
+            'full_name',
+            'mobile_number',
+            'alternate_mobile',
+            'gender',
+            'dob',
+            'age',
+            'blood_group',
+            'address',
+            'created_at',
+            'weight',
+          ],
+        );
+      }
+
+      final opdVisits = legacyNames[tableOpdVisits];
+      if (opdVisits != null) {
+        await _copyCommonColumns(
+          db,
+          from: opdVisits,
+          to: tableOpdVisits,
+          sourceColumns: const [
+            'id',
+            'opd_id',
+            'patient_id',
+            'visit_datetime',
+            'opd_type',
+            'charge_type',
+            'diagnosis',
+            'symptoms',
+            'clinical_notes',
+            'consultation_fee',
+            'medicine_fee',
+            'panchakarma_fee',
+            'total_fee',
+            'discount_type',
+            'discount_value',
+            'payment_mode',
+            'next_visit_date',
+            'followup_status',
+            'created_at',
+            'medicines',
+            'panchakarma_notes',
+          ],
+        );
+      }
+
+      for (final table in [
+        tableCalendarNotes,
+        tableClinicSettings,
+        tableUsers,
+        tableMedicines,
+        tableSymptomsMaster,
+      ]) {
+        final legacy = legacyNames[table];
+        if (legacy == null) continue;
+        final sourceColumns = switch (table) {
+          tableCalendarNotes => const [
+            'id',
+            'note_date',
+            'note_text',
+            'created_at',
+            'updated_at',
+          ],
+          tableClinicSettings => const [
+            'id',
+            'doctor_name',
+            'doctor_email',
+            'doctor_contact',
+            'doctor_license_no',
+            'doctor_photo_path',
+            'clinic_name',
+            'clinic_logo_path',
+            'clinic_address',
+            'clinic_phone',
+            'website',
+            'operating_hours',
+            'smtp_email',
+            'smtp_password',
+            'smtp_server',
+            'smtp_port',
+            'created_at',
+            'updated_at',
+          ],
+          tableUsers => const [
+            'id',
+            'username',
+            'password_hash',
+            'email',
+            'created_at',
+            'reset_otp',
+            'otp_expiry',
+          ],
+          tableMedicines || tableSymptomsMaster => const ['id', 'name'],
+          _ => const <String>[],
+        };
+        await _copyCommonColumns(
+          db,
+          from: legacy,
+          to: table,
+          sourceColumns: sourceColumns,
+        );
+      }
+
+      final images = legacyNames[tablePatientImages];
+      if (images != null) {
+        // The reference database requires an OPD relation.  Rows without one
+        // were never valid source rows and cannot be represented faithfully.
+        await _copyCommonColumns(
+          db,
+          from: images,
+          to: tablePatientImages,
+          sourceColumns: const [
+            'id',
+            'patient_id',
+            'opd_visit_id',
+            'file_path',
+            'image_type',
+            'sync_status',
+            'uploaded_at',
+            'created_at',
+            'drive_url',
+          ],
+          where: 'opd_visit_id IS NOT NULL',
+        );
+      }
+
+      final queue = legacyNames[tableSyncQueue];
+      if (queue != null) {
+        await _copyQueue(db, queue);
+      }
+
+      for (final legacy in legacyNames.values) {
+        await db.execute('DROP TABLE $legacy');
+      }
+    } finally {
+      await db.execute('PRAGMA foreign_keys = ON');
+    }
   }
 
   Future<bool> isInitialized() async {
     try {
       await database;
       return true;
-    } catch (e) {
-      debugPrint('DatabaseHelper.isInitialized error: $e');
+    } catch (error) {
+      debugPrint('DatabaseHelper.isInitialized error: $error');
       return false;
     }
   }

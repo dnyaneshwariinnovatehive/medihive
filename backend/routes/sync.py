@@ -26,6 +26,9 @@ cloud_bp = Blueprint('cloud', __name__)
 
 
 def _sync_opd_to_sheets(opd, image_links=None):
+    if opd is None:
+        logger.warning("_sync_opd_to_sheets: opd is None, skipping")
+        return None
     opd_id = opd.get('id', 'UNKNOWN')
     patient_id = opd.get('patient_id', 'UNKNOWN')
     logger.info(
@@ -189,6 +192,11 @@ def sync_upload():
         except Exception as e:
             logger.error("OPD upsert FAILED for id=%s: %s", r.get('id'), e)
             sheet_warnings.append(f"OPD upsert failed for {r.get('id')}: {e}")
+            continue
+
+        if result is None:
+            logger.error("OPD upsert returned None for id=%s", r.get('id'))
+            sheet_warnings.append(f"OPD upsert returned None for {r.get('id')}")
             continue
 
         results['opd_records'].append(result)

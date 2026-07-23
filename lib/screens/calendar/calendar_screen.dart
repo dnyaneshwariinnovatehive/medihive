@@ -128,8 +128,9 @@ class _CalendarScreenState extends State<CalendarScreen>
                                 ),
                             itemCount: firstDay + daysInMonth,
                             itemBuilder: (context, index) {
-                              if (index < firstDay)
+                              if (index < firstDay) {
                                 return const SizedBox.shrink();
+                              }
                               final day = index - firstDay + 1;
 
                               final now = DateTime.now();

@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -569,14 +567,7 @@ class CloudSyncManager extends ChangeNotifier {
     debugPrint('CLOUD DOWNLOAD: completed, last_sync=$serverTime');
   }
 
-  /// Ensure a valid API token exists for cloud API calls.
-  Future<void> _ensureToken() async {
-    try {
-      await ApiService.ensureToken();
-    } catch (e) {
-      debugPrint('CLOUD SYNC: token check failed: $e');
-    }
-  }
+
 
   /// Register this device with the cloud server.
   Future<void> _registerDevice() async {

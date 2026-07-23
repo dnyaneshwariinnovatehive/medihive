@@ -111,7 +111,7 @@ class _PrescriptionScreenState extends State<PrescriptionScreen> {
       }
 
       _latestRecord = records.first;
-
+      if (!mounted) return;
       final settings = context.read<SettingsProvider>();
 
       final medRaw = _latestRecord['medicines'] as String? ?? '';
@@ -339,7 +339,7 @@ class _PrescriptionScreenState extends State<PrescriptionScreen> {
     _rx = updatedRx;
 
     setState(() => _isEditing = false);
-
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('Prescription saved'),

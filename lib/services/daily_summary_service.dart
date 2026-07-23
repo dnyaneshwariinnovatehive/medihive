@@ -19,8 +19,6 @@ class DailySummaryService {
   static const _eveningSummaryId = 9002;
   static const int _clinicalStartHour = 8;
   static const int _clinicalEndHour = 19;
-  static const int _morningHour = 8;
-  static const int _eveningHour = 19;
 
   static int _todayFollowUpCount() {
     try {

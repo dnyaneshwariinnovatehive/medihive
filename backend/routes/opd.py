@@ -84,6 +84,10 @@ def save_images_locally(opd_id, files):
 
 
 def build_sheet_row_data(opd, patient, drive_urls):
+    if patient is None:
+        patient = {}
+    if opd is None:
+        opd = {}
     def safe_int(val):
         try:
             return int(float(val)) if val else 0

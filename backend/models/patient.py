@@ -188,7 +188,20 @@ class Patient:
             logger.info("Patient upsert: found existing patient by name+mobile, id=%s", existing['id'])
             return Patient.update(existing['id'], data)
 
-        return Patient.create(data)
+        created = Patient.create(data)
+        if created is not None:
+            return created
+
+        # create() returned None — do a final name+mobile lookup as fallback
+        db = get_db()
+        try:
+            row = db.execute(
+                "SELECT * FROM patients WHERE full_name = %s AND mobile_number = %s LIMIT 1",
+                (data.get('full_name', ''), data.get('mobile_number', ''))
+            ).fetchone()
+            return Patient.dict_from_row(row) if row else None
+        finally:
+            db.close()
 
     @staticmethod
     def updated_since(timestamp):

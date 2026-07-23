@@ -1,4 +1,9 @@
-const int databaseVersion = 12;
+/// SQLite schema contract copied from `clinic (1).db`.
+///
+/// Do not add sync-only columns, defaults, indexes, or tables here.  Sync
+/// identity and revision data live in Hive so that a clinic database can be
+/// exchanged with the reference application without schema drift.
+const int databaseVersion = 13;
 
 const String tablePatients = 'patients';
 const String tableOpdVisits = 'opd_visits';
@@ -10,25 +15,28 @@ const String tableSymptomsMaster = 'symptoms_master';
 const String tablePatientImages = 'patient_images';
 const String tableSyncQueue = 'sync_queue';
 
-String get createPatientsTable => '''
+String get createPatientsTable =>
+    '''
   CREATE TABLE $tablePatients (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    full_name VARCHAR(255) NOT NULL,
-    mobile_number VARCHAR(20) NOT NULL,
-    alternate_mobile VARCHAR(20),
-    gender VARCHAR(20) NOT NULL,
+    id INTEGER NOT NULL,
+    full_name VARCHAR NOT NULL,
+    mobile_number VARCHAR NOT NULL,
+    alternate_mobile VARCHAR,
+    gender VARCHAR NOT NULL,
     dob DATE,
     age INTEGER,
-    blood_group VARCHAR(10),
-    address VARCHAR(500),
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    sync_id TEXT
+    blood_group VARCHAR,
+    address VARCHAR,
+    created_at DATETIME,
+    weight FLOAT,
+    PRIMARY KEY (id)
   )
 ''';
 
-String get createOpdVisitsTable => '''
+String get createOpdVisitsTable =>
+    '''
   CREATE TABLE $tableOpdVisits (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER NOT NULL,
     opd_id VARCHAR NOT NULL,
     patient_id INTEGER NOT NULL,
     visit_datetime DATETIME NOT NULL,
@@ -37,36 +45,40 @@ String get createOpdVisitsTable => '''
     diagnosis VARCHAR,
     symptoms VARCHAR,
     clinical_notes VARCHAR,
-    consultation_fee TEXT,
-    medicine_fee TEXT,
-    panchakarma_fee TEXT,
-    total_fee TEXT,
+    consultation_fee FLOAT,
+    medicine_fee FLOAT,
+    panchakarma_fee FLOAT,
+    total_fee FLOAT,
     discount_type VARCHAR,
-    discount_value TEXT,
+    discount_value FLOAT,
     payment_mode VARCHAR,
     next_visit_date DATE,
     followup_status VARCHAR,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     medicines TEXT,
     panchakarma_notes TEXT,
+    PRIMARY KEY (id),
     FOREIGN KEY (patient_id) REFERENCES $tablePatients (id)
   )
 ''';
 
-String get createCalendarNotesTable => '''
+String get createCalendarNotesTable =>
+    '''
   CREATE TABLE $tableCalendarNotes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER NOT NULL,
     note_date DATE NOT NULL,
     note_text TEXT,
     created_at DATETIME,
     updated_at DATETIME,
+    PRIMARY KEY (id),
     UNIQUE (note_date)
   )
 ''';
 
-String get createClinicSettingsTable => '''
+String get createClinicSettingsTable =>
+    '''
   CREATE TABLE $tableClinicSettings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER NOT NULL,
     doctor_name VARCHAR(255),
     doctor_email VARCHAR(255),
     doctor_contact VARCHAR(50),
@@ -83,98 +95,109 @@ String get createClinicSettingsTable => '''
     smtp_server VARCHAR(255),
     smtp_port VARCHAR(10),
     created_at DATETIME,
-    updated_at DATETIME
+    updated_at DATETIME,
+    PRIMARY KEY (id)
   )
 ''';
 
-String get createUsersTable => '''
+String get createUsersTable =>
+    '''
   CREATE TABLE $tableUsers (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER NOT NULL,
     username VARCHAR(50) NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     email VARCHAR(255) NOT NULL,
     created_at DATETIME,
     reset_otp VARCHAR(10),
     otp_expiry DATETIME,
+    PRIMARY KEY (id),
     UNIQUE (username)
   )
 ''';
 
-String get createMedicinesTable => '''
+String get createMedicinesTable =>
+    '''
   CREATE TABLE $tableMedicines (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER NOT NULL,
     name VARCHAR NOT NULL,
+    PRIMARY KEY (id),
     UNIQUE (name)
   )
 ''';
 
-String get createSymptomsMasterTable => '''
+String get createSymptomsMasterTable =>
+    '''
   CREATE TABLE $tableSymptomsMaster (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    UNIQUE (name)
+    name TEXT NOT NULL UNIQUE
   )
 ''';
 
-String get createPatientImagesTable => '''
+String get createPatientImagesTable =>
+    '''
   CREATE TABLE $tablePatientImages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER NOT NULL,
     patient_id INTEGER NOT NULL,
-    opd_visit_id INTEGER DEFAULT NULL,
-    file_path VARCHAR(500) NOT NULL,
-    image_type VARCHAR(50) DEFAULT NULL,
-    sync_status VARCHAR(30) DEFAULT 'Pending',
-    uploaded_at DATETIME DEFAULT NULL,
+    opd_visit_id INTEGER NOT NULL,
+    file_path VARCHAR NOT NULL,
+    image_type VARCHAR,
+    sync_status VARCHAR,
+    uploaded_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    drive_url TEXT DEFAULT NULL,
+    drive_url TEXT,
+    PRIMARY KEY (id),
     FOREIGN KEY (patient_id) REFERENCES $tablePatients (id),
     FOREIGN KEY (opd_visit_id) REFERENCES $tableOpdVisits (id)
   )
 ''';
 
-String get createSyncQueueTable => '''
+String get createSyncQueueTable =>
+    '''
   CREATE TABLE $tableSyncQueue (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER NOT NULL,
     entity_type VARCHAR(20) NOT NULL,
     entity_id VARCHAR(100) NOT NULL,
-    operation VARCHAR(20) DEFAULT 'upsert',
     status VARCHAR(20),
-    retry_count INTEGER DEFAULT 0,
+    retry_count INTEGER,
     last_error TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    last_attempt DATETIME
+    created_at DATETIME,
+    last_attempt DATETIME,
+    PRIMARY KEY (id)
   )
 ''';
 
-String get createixPatientsId => '''
+String get createixPatientsId =>
+    '''
   CREATE INDEX ix_patients_id ON $tablePatients (id)
 ''';
 
-String get createixPatientsSyncId => '''
-  CREATE INDEX ix_patients_sync_id ON $tablePatients (sync_id)
-''';
-
-String get createixOpdVisitsId => '''
+String get createixOpdVisitsId =>
+    '''
   CREATE INDEX ix_opd_visits_id ON $tableOpdVisits (id)
 ''';
 
-String get createixOpdVisitsOpdId => '''
+String get createixOpdVisitsOpdId =>
+    '''
   CREATE UNIQUE INDEX ix_opd_visits_opd_id ON $tableOpdVisits (opd_id)
 ''';
 
-String get createixPatientImagesId => '''
+String get createixPatientImagesId =>
+    '''
   CREATE INDEX ix_patient_images_id ON $tablePatientImages (id)
 ''';
 
-String get createixSyncQueueId => '''
+String get createixSyncQueueId =>
+    '''
   CREATE INDEX ix_sync_queue_id ON $tableSyncQueue (id)
 ''';
 
-String get createixUsersId => '''
+String get createixUsersId =>
+    '''
   CREATE INDEX ix_users_id ON $tableUsers (id)
 ''';
 
-String get createixClinicSettingsId => '''
+String get createixClinicSettingsId =>
+    '''
   CREATE INDEX ix_clinic_settings_id ON $tableClinicSettings (id)
 ''';
 
@@ -189,7 +212,6 @@ List<String> get createStatements => [
   createPatientImagesTable,
   createSyncQueueTable,
   createixPatientsId,
-  createixPatientsSyncId,
   createixOpdVisitsId,
   createixOpdVisitsOpdId,
   createixPatientImagesId,
