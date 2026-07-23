@@ -22,6 +22,7 @@ from routes.opd import save_images_locally, build_sheet_row_data, _ImageRecord
 logger = get_logger(__name__)
 
 sync_bp = Blueprint('sync', __name__)
+cloud_bp = Blueprint('cloud', __name__)
 
 
 def _sync_opd_to_sheets(opd, image_links=None):
@@ -85,12 +86,14 @@ def _sync_opd_to_sheets(opd, image_links=None):
 # ── Device Registration (Dummy for compatibility) ──
 
 @sync_bp.route('/register-device', methods=['POST'])
+@cloud_bp.route('/register-device', methods=['POST'])
 def register_device():
     logger.info("Device registration request received (dummy endpoint)")
     return jsonify({'message': 'Device registered'}), 200
 
 
 @sync_bp.route('/heartbeat', methods=['POST'])
+@cloud_bp.route('/heartbeat', methods=['POST'])
 def heartbeat():
     return jsonify({'message': 'ok'}), 200
 
@@ -99,6 +102,7 @@ def heartbeat():
 
 @sync_bp.route('/upload', methods=['POST'])
 @sync_bp.route('/push', methods=['POST'])
+@cloud_bp.route('/upload-changes', methods=['POST'])
 @jwt_required()
 def sync_upload():
     user_id = get_jwt_identity()
@@ -222,6 +226,7 @@ def sync_upload():
 
 @sync_bp.route('/download', methods=['POST'])
 @sync_bp.route('/pull', methods=['POST'])
+@cloud_bp.route('/download-changes', methods=['POST'])
 @jwt_required()
 def sync_download():
     user_id = get_jwt_identity()
@@ -286,6 +291,7 @@ def full_restore():
 
 @sync_bp.route('/upload-images/<opd_id>', methods=['POST'])
 @sync_bp.route('/push/images/<opd_id>', methods=['POST'])
+@cloud_bp.route('/upload-images/<opd_id>', methods=['POST'])
 @jwt_required()
 def sync_upload_images(opd_id):
     user_id = get_jwt_identity()
