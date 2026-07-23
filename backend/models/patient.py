@@ -35,9 +35,11 @@ class Patient:
     @staticmethod
     def all():
         db = get_db()
-        rows = db.execute("SELECT * FROM patients ORDER BY created_at DESC").fetchall()
-        db.close()
-        return [Patient.dict_from_row(r) for r in rows]
+        try:
+            rows = db.execute("SELECT * FROM patients ORDER BY created_at DESC").fetchall()
+            return [Patient.dict_from_row(r) for r in rows]
+        finally:
+            db.close()
 
     @staticmethod
     def get(patient_id):
@@ -45,9 +47,11 @@ class Patient:
         if pid is None:
             return None
         db = get_db()
-        row = db.execute("SELECT * FROM patients WHERE id = %s", (pid,)).fetchone()
-        db.close()
-        return Patient.dict_from_row(row)
+        try:
+            row = db.execute("SELECT * FROM patients WHERE id = %s", (str(pid),)).fetchone()
+            return Patient.dict_from_row(row)
+        finally:
+            db.close()
 
     @staticmethod
     def create(data):
@@ -55,25 +59,24 @@ class Patient:
         now = datetime.utcnow().isoformat()
         db = get_db()
         try:
-            db.execute("""
-                INSERT INTO patients (id, full_name, dob, age, gender, blood_group, mobile_number, alternate_mobile, address,
-                                      created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                pid, data['full_name'], data.get('dob', ''),
-                data.get('age', 0), data.get('gender', 'Not Specified'),
-                data.get('blood_group', 'Not Specified'),
-                data.get('mobile_number', ''), data.get('alternate_mobile', ''),
-                data.get('address', ''),
-                now
-            ))
-            db.commit()
-            db.close()
-            return Patient.get(pid)
-        except Exception as e:
-            db.rollback()
-            logger.warning("Patient create with explicit id=%s failed (%s), retrying with auto-generated id", pid, e)
             try:
+                db.execute("""
+                    INSERT INTO patients (id, full_name, dob, age, gender, blood_group, mobile_number, alternate_mobile, address,
+                                          created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    str(pid), data['full_name'], data.get('dob', ''),
+                    data.get('age', 0), data.get('gender', 'Not Specified'),
+                    data.get('blood_group', 'Not Specified'),
+                    data.get('mobile_number', ''), data.get('alternate_mobile', ''),
+                    data.get('address', ''),
+                    now
+                ))
+                db.commit()
+                return Patient.get(pid)
+            except Exception as e:
+                db.rollback()
+                logger.warning("Patient create with explicit id=%s failed (%s), retrying with auto-generated id", pid, e)
                 db.execute("""
                     INSERT INTO patients (full_name, dob, age, gender, blood_group, mobile_number, alternate_mobile, address,
                                           created_at)
@@ -91,13 +94,9 @@ class Patient:
                     "SELECT * FROM patients WHERE full_name = %s AND created_at = %s ORDER BY id DESC LIMIT 1",
                     (data['full_name'], now)
                 ).fetchone()
-                db.close()
                 return Patient.dict_from_row(row) if row else None
-            except Exception as e2:
-                db.rollback()
-                db.close()
-                logger.error("Patient create with auto-id also failed: %s", e2)
-                raise
+        finally:
+            db.close()
 
     @staticmethod
     def update(patient_id, data):
@@ -117,12 +116,14 @@ class Patient:
         now = datetime.utcnow().isoformat()
         fields.append("updated_at = %s")
         values.append(now)
-        values.append(pid)
+        values.append(str(pid))
         db = get_db()
-        db.execute(f"UPDATE patients SET {', '.join(fields)} WHERE id = %s", values)
-        db.commit()
-        db.close()
-        return Patient.get(pid)
+        try:
+            db.execute(f"UPDATE patients SET {', '.join(fields)} WHERE id = %s", values)
+            db.commit()
+            return Patient.get(pid)
+        finally:
+            db.close()
 
     @staticmethod
     def assign_next_id():
@@ -145,16 +146,22 @@ class Patient:
             return
         from models.opd_record import OPDRecord
         db = get_db()
-        opd_rows = db.execute(
-            "SELECT id FROM opd_visits WHERE patient_id = %s", (pid,)
-        ).fetchall()
-        db.close()
+        try:
+            opd_rows = db.execute(
+                "SELECT id FROM opd_visits WHERE patient_id = %s", (str(pid),)
+            ).fetchall()
+        finally:
+            db.close()
+
         for row in opd_rows:
             OPDRecord.delete(row['id'])
+
         db = get_db()
-        db.execute("DELETE FROM patients WHERE id = %s", (pid,))
-        db.commit()
-        db.close()
+        try:
+            db.execute("DELETE FROM patients WHERE id = %s", (str(pid),))
+            db.commit()
+        finally:
+            db.close()
 
     @staticmethod
     def upsert(data):
@@ -162,27 +169,33 @@ class Patient:
         if existing:
             return Patient.update(data['id'], data)
         # Also try to find by name+mobile to avoid duplicate patients
+        row = None
+        db = get_db()
         try:
-            db = get_db()
             row = db.execute(
                 "SELECT * FROM patients WHERE full_name = %s AND mobile_number = %s LIMIT 1",
                 (data.get('full_name', ''), data.get('mobile_number', ''))
             ).fetchone()
-            db.close()
-            if row:
-                existing = Patient.dict_from_row(row)
-                logger.info("Patient upsert: found existing patient by name+mobile, id=%s", existing['id'])
-                return Patient.update(existing['id'], data)
         except Exception as e:
             logger.warning("Patient upsert name+mobile lookup failed: %s", e)
+        finally:
+            db.close()
+
+        if row:
+            existing = Patient.dict_from_row(row)
+            logger.info("Patient upsert: found existing patient by name+mobile, id=%s", existing['id'])
+            return Patient.update(existing['id'], data)
+
         return Patient.create(data)
 
     @staticmethod
     def updated_since(timestamp):
         db = get_db()
-        rows = db.execute(
-            "SELECT * FROM patients WHERE COALESCE(updated_at, created_at) > %s ORDER BY COALESCE(updated_at, created_at)",
-            (timestamp,)
-        ).fetchall()
-        db.close()
-        return [Patient.dict_from_row(r) for r in rows]
+        try:
+            rows = db.execute(
+                "SELECT * FROM patients WHERE COALESCE(updated_at, created_at) > %s ORDER BY COALESCE(updated_at, created_at)",
+                (timestamp,)
+            ).fetchall()
+            return [Patient.dict_from_row(r) for r in rows]
+        finally:
+            db.close()

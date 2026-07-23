@@ -65,7 +65,7 @@ def _sync_opd_to_sheets(opd, image_links=None):
                     VALUES (%s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO NOTHING
                 """, (
-                    parsed_pid, 'Unknown (Auto-created)',
+                    str(parsed_pid), 'Unknown (Auto-created)',
                     '', 'Not Specified', now,
                 ))
                 db.commit()
