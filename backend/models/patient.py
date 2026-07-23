@@ -1,5 +1,8 @@
 from database import get_db
 from datetime import datetime
+from services.log_service import get_logger
+
+logger = get_logger(__name__)
 
 
 def parse_patient_id(pid):
@@ -51,21 +54,50 @@ class Patient:
         pid = parse_patient_id(data['id'])
         now = datetime.utcnow().isoformat()
         db = get_db()
-        db.execute("""
-            INSERT INTO patients (id, full_name, dob, age, gender, blood_group, mobile_number, alternate_mobile, address,
-                                  created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            pid, data['full_name'], data.get('dob', ''),
-            data.get('age', 0), data.get('gender', 'Not Specified'),
-            data.get('blood_group', 'Not Specified'),
-            data.get('mobile_number', ''), data.get('alternate_mobile', ''),
-            data.get('address', ''),
-            now
-        ))
-        db.commit()
-        db.close()
-        return Patient.get(pid)
+        try:
+            db.execute("""
+                INSERT INTO patients (id, full_name, dob, age, gender, blood_group, mobile_number, alternate_mobile, address,
+                                      created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                pid, data['full_name'], data.get('dob', ''),
+                data.get('age', 0), data.get('gender', 'Not Specified'),
+                data.get('blood_group', 'Not Specified'),
+                data.get('mobile_number', ''), data.get('alternate_mobile', ''),
+                data.get('address', ''),
+                now
+            ))
+            db.commit()
+            db.close()
+            return Patient.get(pid)
+        except Exception as e:
+            db.rollback()
+            logger.warning("Patient create with explicit id=%s failed (%s), retrying with auto-generated id", pid, e)
+            try:
+                db.execute("""
+                    INSERT INTO patients (full_name, dob, age, gender, blood_group, mobile_number, alternate_mobile, address,
+                                          created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    data['full_name'], data.get('dob', ''),
+                    data.get('age', 0), data.get('gender', 'Not Specified'),
+                    data.get('blood_group', 'Not Specified'),
+                    data.get('mobile_number', ''), data.get('alternate_mobile', ''),
+                    data.get('address', ''),
+                    now
+                ))
+                db.commit()
+                row = db.execute(
+                    "SELECT * FROM patients WHERE full_name = %s AND created_at = %s ORDER BY id DESC LIMIT 1",
+                    (data['full_name'], now)
+                ).fetchone()
+                db.close()
+                return Patient.dict_from_row(row) if row else None
+            except Exception as e2:
+                db.rollback()
+                db.close()
+                logger.error("Patient create with auto-id also failed: %s", e2)
+                raise
 
     @staticmethod
     def update(patient_id, data):
@@ -129,6 +161,20 @@ class Patient:
         existing = Patient.get(data['id'])
         if existing:
             return Patient.update(data['id'], data)
+        # Also try to find by name+mobile to avoid duplicate patients
+        try:
+            db = get_db()
+            row = db.execute(
+                "SELECT * FROM patients WHERE full_name = %s AND mobile_number = %s LIMIT 1",
+                (data.get('full_name', ''), data.get('mobile_number', ''))
+            ).fetchone()
+            db.close()
+            if row:
+                existing = Patient.dict_from_row(row)
+                logger.info("Patient upsert: found existing patient by name+mobile, id=%s", existing['id'])
+                return Patient.update(existing['id'], data)
+        except Exception as e:
+            logger.warning("Patient upsert name+mobile lookup failed: %s", e)
         return Patient.create(data)
 
     @staticmethod

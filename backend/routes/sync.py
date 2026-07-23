@@ -6,7 +6,7 @@ Supports legacy and consolidated endpoint names for backward compatibility.
 
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from models.patient import Patient
+from models.patient import Patient, parse_patient_id
 from models.opd_record import OPDRecord
 from models.calendar_note import CalendarNote
 from models.clinic_setting import ClinicSetting
@@ -39,23 +39,10 @@ def _sync_opd_to_sheets(opd, image_links=None):
             "Patient %s not found in PostgreSQL, creating placeholder for sheet sync for OPD %s",
             patient_id, opd_id,
         )
-        now = datetime.utcnow().isoformat()
-        db = get_db()
-        db.execute("""
-            INSERT INTO patients
-                (id, full_name, mobile_number, gender, created_at)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT DO NOTHING
-        """, (
-            patient_id, 'Unknown (Auto-created)',
-            '', 'Not Specified', now,
-        ))
-        db.commit()
-        db.close()
-        patient = Patient.get(patient_id)
-        if not patient:
+        parsed_pid = parse_patient_id(patient_id)
+        if parsed_pid is None:
             logger.error(
-                "Could not create placeholder patient %s for OPD %s",
+                "Cannot create placeholder patient: '%s' is not a valid patient ID for OPD %s",
                 patient_id, opd_id,
             )
             patient = {
@@ -68,6 +55,41 @@ def _sync_opd_to_sheets(opd, image_links=None):
                 'blood_group': '',
                 'address': '',
             }
+        else:
+            now = datetime.utcnow().isoformat()
+            db = get_db()
+            try:
+                db.execute("""
+                    INSERT INTO patients
+                        (id, full_name, mobile_number, gender, created_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO NOTHING
+                """, (
+                    parsed_pid, 'Unknown (Auto-created)',
+                    '', 'Not Specified', now,
+                ))
+                db.commit()
+            except Exception as e:
+                logger.warning("Placeholder patient insert failed for %s: %s", patient_id, e)
+                db.rollback()
+            finally:
+                db.close()
+            patient = Patient.get(patient_id)
+            if not patient:
+                logger.error(
+                    "Could not create placeholder patient %s for OPD %s",
+                    patient_id, opd_id,
+                )
+                patient = {
+                    'id': patient_id,
+                    'full_name': 'Unknown',
+                    'mobile_number': '',
+                    'gender': 'Not Specified',
+                    'dob': '',
+                    'age': 0,
+                    'blood_group': '',
+                    'address': '',
+                }
 
     row_data = build_sheet_row_data(opd, patient, image_links or [])
     try:
@@ -131,7 +153,18 @@ def sync_upload():
             p['id'] = Patient.assign_next_id()
             temp_id_map[old_id] = p['id']
 
-        patient = Patient.upsert(p)
+        try:
+            patient = Patient.upsert(p)
+        except Exception as e:
+            logger.error("Patient upsert FAILED for id=%s: %s", old_id, e)
+            sheet_warnings.append(f"Patient upsert failed for {old_id}: {e}")
+            continue
+
+        if patient is None:
+            logger.error("Patient upsert returned None for id=%s", old_id)
+            sheet_warnings.append(f"Patient upsert returned None for {old_id}")
+            continue
+
         results['patients'].append(patient)
 
         # Sync all OPD records of this patient to Google Sheet to update patient details there immediately!
@@ -140,10 +173,10 @@ def sync_upload():
             for opd in opds:
                 sheet_err = _sync_opd_to_sheets(opd)
                 if sheet_err:
-                    sheet_warnings.append(sheet_err)
+                    sheet_warnings.append(f"Patient {patient['id']} OPD {opd.get('id')}: {sheet_err}")
         except Exception as e:
             logger.warning("Failed to sync patient %s OPDs to sheets: %s", patient['id'], e)
-            sheet_warnings.append(str(e))
+            sheet_warnings.append(f"Patient {patient.get('id', old_id)} OPD batch sync failed: {e}")
 
     # ── OPD Records ──
     for r in data.get('opd_records', []):
@@ -151,16 +184,22 @@ def sync_upload():
         if pat_id in temp_id_map:
             r['patient_id'] = temp_id_map[pat_id]
 
-        result = OPDRecord.upsert(r)
+        try:
+            result = OPDRecord.upsert(r)
+        except Exception as e:
+            logger.error("OPD upsert FAILED for id=%s: %s", r.get('id'), e)
+            sheet_warnings.append(f"OPD upsert failed for {r.get('id')}: {e}")
+            continue
+
         results['opd_records'].append(result)
 
         try:
             sheet_err = _sync_opd_to_sheets(result)
             if sheet_err:
-                sheet_warnings.append(sheet_err)
+                sheet_warnings.append(f"OPD {result.get('id')}: {sheet_err}")
         except Exception as e:
             logger.warning("Sheet sync failed for OPD %s: %s", r.get('id'), e)
-            sheet_warnings.append(str(e))
+            sheet_warnings.append(f"OPD {r.get('id')}: sheet sync exception: {e}")
 
     # ── Calendar Notes ──
     for note in data.get('calendar_notes', []):

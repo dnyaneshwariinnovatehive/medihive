@@ -1,6 +1,9 @@
 from database import get_db
 from datetime import datetime
 from models.patient import parse_patient_id
+from services.log_service import get_logger
+
+logger = get_logger(__name__)
 
 
 class OPDRecord:
@@ -51,29 +54,39 @@ class OPDRecord:
         pid = parse_patient_id(data['patient_id'])
         now = datetime.utcnow().isoformat()
         db = get_db()
-        db.execute("""
-            INSERT INTO opd_visits (opd_id, patient_id, opd_type, symptoms, diagnosis, medicines,
-                visit_datetime, clinical_notes, consultation_fee, medicine_fee, panchakarma_fee,
-                total_fee, discount_value, discount_type, payment_mode, charge_type,
-                followup_status, next_visit_date, panchakarma_notes, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            data['id'], pid, data.get('opd_type', 'consultation'),
-            data.get('symptoms', ''), data.get('diagnosis', ''),
-            data.get('medicines', ''), data.get('visit_datetime', now),
-            data.get('clinical_notes', ''), data.get('consultation_fee', '0'),
-            data.get('medicine_fee', '0'), data.get('panchakarma_fee', '0'),
-            data.get('total_fee', '0'), data.get('discount_value', '0'),
-            data.get('discount_type', 'None'),
-            data.get('payment_mode', ''), data.get('charge_type', ''),
-            data.get('followup_status', ''),
-            data.get('next_visit_date', ''),
-            data.get('panchakarma_notes', ''),
-            now
-        ))
-        db.commit()
-        db.close()
-        return OPDRecord.get_by_opd_id(data['id'])
+        try:
+            db.execute("""
+                INSERT INTO opd_visits (opd_id, patient_id, opd_type, symptoms, diagnosis, medicines,
+                    visit_datetime, clinical_notes, consultation_fee, medicine_fee, panchakarma_fee,
+                    total_fee, discount_value, discount_type, payment_mode, charge_type,
+                    followup_status, next_visit_date, panchakarma_notes, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                data['id'], pid, data.get('opd_type', 'consultation'),
+                data.get('symptoms', ''), data.get('diagnosis', ''),
+                data.get('medicines', ''), data.get('visit_datetime', now),
+                data.get('clinical_notes', ''), data.get('consultation_fee', '0'),
+                data.get('medicine_fee', '0'), data.get('panchakarma_fee', '0'),
+                data.get('total_fee', '0'), data.get('discount_value', '0'),
+                data.get('discount_type', 'None'),
+                data.get('payment_mode', ''), data.get('charge_type', ''),
+                data.get('followup_status', ''),
+                data.get('next_visit_date', ''),
+                data.get('panchakarma_notes', ''),
+                now
+            ))
+            db.commit()
+            db.close()
+            return OPDRecord.get_by_opd_id(data['id'])
+        except Exception as e:
+            db.rollback()
+            db.close()
+            logger.warning("OPD create failed for opd_id=%s (%s), falling back to update", data['id'], e)
+            try:
+                OPDRecord.update(data['id'], data)
+            except Exception as e2:
+                logger.error("OPD fallback update also failed for opd_id=%s: %s", data['id'], e2)
+            return OPDRecord.get_by_opd_id(data['id'])
 
     @staticmethod
     def update(record_id, data):
@@ -121,10 +134,21 @@ class OPDRecord:
 
     @staticmethod
     def upsert(data):
-        existing = OPDRecord.get(data['id'])
+        try:
+            existing = OPDRecord.get(data['id'])
+        except Exception as e:
+            logger.warning("OPD upsert get failed for id=%s: %s", data['id'], e)
+            existing = None
         if existing:
-            return OPDRecord.update(data['id'], data)
-        return OPDRecord.create(data)
+            try:
+                return OPDRecord.update(data['id'], data)
+            except Exception as e:
+                logger.warning("OPD upsert update failed for id=%s: %s, falling back to create", data['id'], e)
+        try:
+            return OPDRecord.create(data)
+        except Exception as e:
+            logger.error("OPD upsert create failed for id=%s: %s", data['id'], e)
+            raise
 
     @staticmethod
     def updated_since(timestamp):
