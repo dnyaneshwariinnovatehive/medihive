@@ -54,20 +54,31 @@ class OPDRecord:
         return OPDRecord.get(opd_id)
 
     @staticmethod
+    @staticmethod
+    def _next_id():
+        db = get_db()
+        try:
+            row = db.execute("SELECT COALESCE(MAX(id), 0) + 1 AS nid FROM opd_visits").fetchone()
+            return row['nid']
+        finally:
+            db.close()
+
+    @staticmethod
     def create(data):
         pid = parse_patient_id(data['patient_id'])
         now = datetime.utcnow().isoformat()
+        new_id = OPDRecord._next_id()
         db = get_db()
         try:
             try:
                 db.execute("""
-                    INSERT INTO opd_visits (opd_id, patient_id, opd_type, symptoms, diagnosis, medicines,
+                    INSERT INTO opd_visits (id, opd_id, patient_id, opd_type, symptoms, diagnosis, medicines,
                         visit_datetime, clinical_notes, consultation_fee, medicine_fee, panchakarma_fee,
                         total_fee, discount_value, discount_type, payment_mode, charge_type,
                         followup_status, next_visit_date, panchakarma_notes, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
-                    data['id'], str(pid) if pid else None, data.get('opd_type', 'consultation'),
+                    new_id, data['id'], str(pid) if pid else None, data.get('opd_type', 'consultation'),
                     data.get('symptoms', ''), data.get('diagnosis', ''),
                     data.get('medicines', ''), data.get('visit_datetime', now),
                     data.get('clinical_notes', ''), data.get('consultation_fee', '0'),
