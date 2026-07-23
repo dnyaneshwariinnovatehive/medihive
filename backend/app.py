@@ -28,6 +28,9 @@ def create_app():
 
     JWTManager(app)
 
+    from database import teardown_db
+    app.teardown_appcontext(teardown_db)
+
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(patients_bp, url_prefix='/api/patients')
     app.register_blueprint(opd_bp, url_prefix='/api/opd')

@@ -68,9 +68,10 @@ class DBConnection:
     that mimics sqlite3's connection.execute() interface
     so model code requires minimal changes."""
 
-    def __init__(self, conn):
+    def __init__(self, conn, request_scoped=False):
         self._conn = conn
         self._cursor = conn.cursor(cursor_factory=RealDictCursor)
+        self.request_scoped = request_scoped
 
     def execute(self, sql, params=None):
         try:
@@ -102,6 +103,12 @@ class DBConnection:
         self._conn.cursor().execute(f"ROLLBACK TO SAVEPOINT {name}")
 
     def close(self):
+        if self.request_scoped:
+            # Leave open for request reuse
+            return
+        self._real_close()
+
+    def _real_close(self):
         try:
             self._cursor.close()
         except Exception:
@@ -112,11 +119,7 @@ class DBConnection:
             pass
 
 
-def get_db():
-    """Get a database connection from the pool.
-    Lazily initializes the database schema on first call.
-    Retries once if the pool needs re-creation (e.g., after Neon auto-suspend)."""
-    _init_db()
+def _checkout_conn():
     for attempt in range(2):
         try:
             pool_obj = get_pool()
@@ -127,14 +130,46 @@ def get_db():
                     continue
                 raise RuntimeError("Connection pool not available")
             conn = pool_obj.getconn()
-            return DBConnection(conn)
+            return conn
         except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
-            logger.warning("get_db attempt %d failed: %s", attempt + 1, e)
+            logger.warning("_checkout_conn attempt %d failed: %s", attempt + 1, e)
             if attempt == 0:
                 reset_pool()
                 time.sleep(1)
                 continue
             raise
+
+
+def get_db():
+    """Get a database connection from the pool.
+    Lazily initializes the database schema on first call.
+    Retries once if the pool needs re-creation (e.g., after Neon auto-suspend)."""
+    _init_db()
+    try:
+        from flask import has_app_context, g
+        if has_app_context():
+            if 'db_conn' not in g:
+                conn = _checkout_conn()
+                g.db_conn = DBConnection(conn, request_scoped=True)
+            return g.db_conn
+    except ImportError:
+        pass
+
+    conn = _checkout_conn()
+    return DBConnection(conn, request_scoped=False)
+
+
+def teardown_db(exception):
+    """Release request-scoped database connection back to pool."""
+    try:
+        from flask import g
+        db_conn = g.pop('db_conn', None)
+        if db_conn is not None:
+            if exception:
+                db_conn.rollback()
+            db_conn._real_close()
+    except Exception as e:
+        logger.error("Error in teardown_db: %s", e)
 
 
 def _init_db():
