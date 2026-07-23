@@ -1,5 +1,6 @@
 from database import get_db
 from datetime import datetime
+from models.patient import parse_patient_id
 
 
 class OPDRecord:
@@ -9,15 +10,22 @@ class OPDRecord:
     def dict_from_row(row):
         if row is None:
             return None
-        return dict(row)
+        d = dict(row)
+        d['db_id'] = row['id']
+        if 'opd_id' in d:
+            d['id'] = d['opd_id']
+        if 'patient_id' in d and isinstance(d['patient_id'], int):
+            d['patient_id'] = f"P{d['patient_id']:03d}"
+        return d
 
     @staticmethod
     def all(patient_id=None):
         db = get_db()
-        if patient_id:
+        pid = parse_patient_id(patient_id)
+        if pid:
             rows = db.execute(
                 "SELECT * FROM opd_visits WHERE patient_id = %s ORDER BY visit_datetime DESC",
-                (patient_id,)
+                (pid,)
             ).fetchall()
         else:
             rows = db.execute("SELECT * FROM opd_visits ORDER BY visit_datetime DESC").fetchall()
@@ -27,29 +35,30 @@ class OPDRecord:
     @staticmethod
     def get(record_id):
         db = get_db()
-        row = db.execute("SELECT * FROM opd_visits WHERE id = %s", (record_id,)).fetchone()
+        if isinstance(record_id, int) or (isinstance(record_id, str) and record_id.isdigit()):
+            row = db.execute("SELECT * FROM opd_visits WHERE id = %s", (int(record_id),)).fetchone()
+        else:
+            row = db.execute("SELECT * FROM opd_visits WHERE opd_id = %s", (str(record_id),)).fetchone()
         db.close()
         return OPDRecord.dict_from_row(row)
 
     @staticmethod
     def get_by_opd_id(opd_id):
-        db = get_db()
-        row = db.execute("SELECT * FROM opd_visits WHERE opd_id = %s", (opd_id,)).fetchone()
-        db.close()
-        return OPDRecord.dict_from_row(row)
+        return OPDRecord.get(opd_id)
 
     @staticmethod
     def create(data):
+        pid = parse_patient_id(data['patient_id'])
         now = datetime.utcnow().isoformat()
         db = get_db()
         db.execute("""
-            INSERT INTO opd_visits (id, patient_id, opd_type, symptoms, diagnosis, medicines,
+            INSERT INTO opd_visits (opd_id, patient_id, opd_type, symptoms, diagnosis, medicines,
                 visit_datetime, clinical_notes, consultation_fee, medicine_fee, panchakarma_fee,
                 total_fee, discount_value, discount_type, payment_mode, charge_type,
                 followup_status, next_visit_date, panchakarma_notes, created_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
-            data['id'], data['patient_id'], data.get('opd_type', 'consultation'),
+            data['id'], pid, data.get('opd_type', 'consultation'),
             data.get('symptoms', ''), data.get('diagnosis', ''),
             data.get('medicines', ''), data.get('visit_datetime', now),
             data.get('clinical_notes', ''), data.get('consultation_fee', '0'),
@@ -64,7 +73,7 @@ class OPDRecord:
         ))
         db.commit()
         db.close()
-        return OPDRecord.get(data['id'])
+        return OPDRecord.get_by_opd_id(data['id'])
 
     @staticmethod
     def update(record_id, data):
@@ -73,7 +82,7 @@ class OPDRecord:
                    'panchakarma_fee', 'total_fee', 'discount_value', 'discount_type',
                    'payment_mode', 'charge_type',
                    'followup_status', 'next_visit_date',
-                   'panchakarma_notes')
+                   'panchakarma_notes', 'opd_id')
         fields = []
         values = []
         for k in allowed:
@@ -85,9 +94,17 @@ class OPDRecord:
         now = datetime.utcnow().isoformat()
         fields.append("updated_at = %s")
         values.append(now)
-        values.append(record_id)
+        
         db = get_db()
-        db.execute(f"UPDATE opd_visits SET {', '.join(fields)} WHERE id = %s", values)
+        if isinstance(record_id, int) or (isinstance(record_id, str) and record_id.isdigit()):
+            where_clause = "WHERE id = %s"
+            where_val = int(record_id)
+        else:
+            where_clause = "WHERE opd_id = %s"
+            where_val = str(record_id)
+            
+        values.append(where_val)
+        db.execute(f"UPDATE opd_visits SET {', '.join(fields)} {where_clause}", values)
         db.commit()
         db.close()
         return OPDRecord.get(record_id)
@@ -95,7 +112,10 @@ class OPDRecord:
     @staticmethod
     def delete(record_id):
         db = get_db()
-        db.execute("DELETE FROM opd_visits WHERE id = %s", (record_id,))
+        if isinstance(record_id, int) or (isinstance(record_id, str) and record_id.isdigit()):
+            db.execute("DELETE FROM opd_visits WHERE id = %s", (int(record_id),))
+        else:
+            db.execute("DELETE FROM opd_visits WHERE opd_id = %s", (str(record_id),))
         db.commit()
         db.close()
 

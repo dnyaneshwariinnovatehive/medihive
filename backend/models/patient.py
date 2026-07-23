@@ -2,6 +2,19 @@ from database import get_db
 from datetime import datetime
 
 
+def parse_patient_id(pid):
+    if pid is None:
+        return None
+    if isinstance(pid, int):
+        return pid
+    if isinstance(pid, str):
+        # Remove any leading non-digits (like 'P' or 'P0')
+        digits = ''.join(c for c in pid if c.isdigit())
+        if digits:
+            return int(digits)
+    return None
+
+
 class Patient:
     TABLE = 'patients'
 
@@ -9,7 +22,12 @@ class Patient:
     def dict_from_row(row):
         if row is None:
             return None
-        return dict(row)
+        d = dict(row)
+        if 'id' in d:
+            d['db_id'] = d['id']
+            if isinstance(d['id'], int):
+                d['id'] = f"P{d['id']:03d}"
+        return d
 
     @staticmethod
     def all():
@@ -20,13 +38,17 @@ class Patient:
 
     @staticmethod
     def get(patient_id):
+        pid = parse_patient_id(patient_id)
+        if pid is None:
+            return None
         db = get_db()
-        row = db.execute("SELECT * FROM patients WHERE id = %s", (patient_id,)).fetchone()
+        row = db.execute("SELECT * FROM patients WHERE id = %s", (pid,)).fetchone()
         db.close()
         return Patient.dict_from_row(row)
 
     @staticmethod
     def create(data):
+        pid = parse_patient_id(data['id'])
         now = datetime.utcnow().isoformat()
         db = get_db()
         db.execute("""
@@ -34,7 +56,7 @@ class Patient:
                                   created_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
-            data['id'], data['full_name'], data.get('dob', ''),
+            pid, data['full_name'], data.get('dob', ''),
             data.get('age', 0), data.get('gender', 'Not Specified'),
             data.get('blood_group', 'Not Specified'),
             data.get('mobile_number', ''), data.get('alternate_mobile', ''),
@@ -43,10 +65,13 @@ class Patient:
         ))
         db.commit()
         db.close()
-        return Patient.get(data['id'])
+        return Patient.get(pid)
 
     @staticmethod
     def update(patient_id, data):
+        pid = parse_patient_id(patient_id)
+        if pid is None:
+            return None
         allowed = ('full_name', 'dob', 'age', 'gender', 'blood_group', 'mobile_number',
                    'alternate_mobile', 'address')
         fields = []
@@ -56,16 +81,16 @@ class Patient:
                 fields.append(f"{k} = %s")
                 values.append(data[k])
         if not fields:
-            return Patient.get(patient_id)
+            return Patient.get(pid)
         now = datetime.utcnow().isoformat()
         fields.append("updated_at = %s")
         values.append(now)
-        values.append(patient_id)
+        values.append(pid)
         db = get_db()
         db.execute(f"UPDATE patients SET {', '.join(fields)} WHERE id = %s", values)
         db.commit()
         db.close()
-        return Patient.get(patient_id)
+        return Patient.get(pid)
 
     @staticmethod
     def assign_next_id():
@@ -83,16 +108,19 @@ class Patient:
 
     @staticmethod
     def delete(patient_id):
+        pid = parse_patient_id(patient_id)
+        if pid is None:
+            return
         from models.opd_record import OPDRecord
         db = get_db()
         opd_rows = db.execute(
-            "SELECT id FROM opd_visits WHERE patient_id = %s", (patient_id,)
+            "SELECT id FROM opd_visits WHERE patient_id = %s", (pid,)
         ).fetchall()
         db.close()
         for row in opd_rows:
             OPDRecord.delete(row['id'])
         db = get_db()
-        db.execute("DELETE FROM patients WHERE id = %s", (patient_id,))
+        db.execute("DELETE FROM patients WHERE id = %s", (pid,))
         db.commit()
         db.close()
 

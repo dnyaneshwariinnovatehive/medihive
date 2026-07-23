@@ -1,5 +1,6 @@
 from database import get_db
 from datetime import datetime
+from models.patient import parse_patient_id
 
 
 class PatientImage:
@@ -9,20 +10,36 @@ class PatientImage:
     def dict_from_row(row):
         if row is None:
             return None
-        return dict(row)
+        d = dict(row)
+        if 'patient_id' in d and isinstance(d['patient_id'], int):
+            d['patient_id'] = f"P{d['patient_id']:03d}"
+        if 'opd_visit_id' in d and isinstance(d['opd_visit_id'], int):
+            from models.opd_record import OPDRecord
+            opd = OPDRecord.get(d['opd_visit_id'])
+            d['opd_visit_id'] = opd['id'] if opd else None
+        return d
 
     @staticmethod
     def all(patient_id=None, opd_visit_id=None):
+        pid = parse_patient_id(patient_id)
+        
+        # Resolve opd_visit_id to integer database id
+        opd_int_id = None
+        if opd_visit_id:
+            from models.opd_record import OPDRecord
+            opd = OPDRecord.get_by_opd_id(opd_visit_id)
+            opd_int_id = opd['db_id'] if opd else None
+            
         db = get_db()
         query = "SELECT * FROM patient_images"
         params = []
         conditions = []
-        if patient_id:
+        if pid:
             conditions.append("patient_id = %s")
-            params.append(patient_id)
-        if opd_visit_id:
+            params.append(pid)
+        if opd_int_id:
             conditions.append("opd_visit_id = %s")
-            params.append(opd_visit_id)
+            params.append(opd_int_id)
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
         query += " ORDER BY created_at DESC"
@@ -42,14 +59,21 @@ class PatientImage:
 
     @staticmethod
     def create(data):
+        pid = parse_patient_id(data.get('patient_id'))
+        
+        # Resolve opd_visit_id string to database integer
+        from models.opd_record import OPDRecord
+        opd = OPDRecord.get_by_opd_id(data.get('opd_visit_id'))
+        opd_int_id = opd['db_id'] if opd else None
+        
         now = datetime.utcnow().isoformat()
         db = get_db()
         db.execute("""
             INSERT INTO patient_images (patient_id, opd_visit_id, file_path, image_type, sync_status, uploaded_at, drive_url, created_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """, (
-            data.get('patient_id'),
-            data.get('opd_visit_id'),
+            pid,
+            opd_int_id,
             data.get('file_path', ''),
             data.get('image_type', 'prescription'),
             data.get('sync_status', 'synced'),
@@ -64,6 +88,13 @@ class PatientImage:
     def save_drive_urls(opd_visit_id, patient_id, drive_urls):
         if not drive_urls:
             return
+        pid = parse_patient_id(patient_id)
+        
+        # Resolve opd_visit_id string to database integer
+        from models.opd_record import OPDRecord
+        opd = OPDRecord.get_by_opd_id(opd_visit_id)
+        opd_int_id = opd['db_id'] if opd else None
+        
         now = datetime.utcnow().isoformat()
         db = get_db()
         for url in drive_urls:
@@ -71,8 +102,8 @@ class PatientImage:
                 INSERT INTO patient_images (patient_id, opd_visit_id, file_path, image_type, sync_status, uploaded_at, drive_url, created_at)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """, (
-                patient_id,
-                opd_visit_id,
+                pid,
+                opd_int_id,
                 url,
                 'opd_attachment',
                 'synced',
