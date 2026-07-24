@@ -28,7 +28,6 @@ String get createPatientsTable =>
     blood_group VARCHAR,
     address VARCHAR,
     created_at DATETIME,
-    weight FLOAT,
     PRIMARY KEY (id)
   )
 ''';

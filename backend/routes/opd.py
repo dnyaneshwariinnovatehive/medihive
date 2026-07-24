@@ -114,14 +114,6 @@ def build_sheet_row_data(opd, patient, drive_urls):
     pk_val = opd.get('panchakarma_notes', '')
     logger.info("SHEET DEBUG: build_sheet_row_data for OPD %s panchakarma_notes=%r", opd['id'], pk_val)
 
-    # Preserve existing image_links from PostgreSQL when no new drive_urls provided.
-    # This prevents sync push from overwriting uploaded image links with empty.
-    if not drive_urls:
-        existing_links = opd.get('image_links', '') or ''
-        if existing_links:
-            drive_urls = existing_links.split('\n')
-            logger.info("SHEET PRESERVED image_links for OPD %s: %s", opd['id'], drive_urls)
-
     return {
         'OPD ID': opd['id'],
         'Patient ID': opd['patient_id'],

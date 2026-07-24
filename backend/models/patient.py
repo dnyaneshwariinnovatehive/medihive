@@ -114,10 +114,6 @@ class Patient:
         if not fields:
             return Patient.get(pid)
         now = datetime.utcnow().isoformat()
-        from database import has_column
-        if has_column('patients', 'updated_at'):
-            fields.append("updated_at = %s")
-            values.append(now)
         values.append(str(pid))
         db = get_db()
         try:
@@ -132,10 +128,19 @@ class Patient:
         """Generate the next sequential patient ID (e.g., P001, P002, ...)."""
         db = get_db()
         try:
-            result = db.execute(
-                "SELECT COALESCE(MAX(CAST(SUBSTR(TRIM(id), 2) AS INTEGER)), 0) + 1 AS nid "
-                "FROM patients WHERE id LIKE 'P%'"
-            ).fetchone()
+            result = db.execute("""
+                SELECT COALESCE(
+                    MAX(
+                        CASE 
+                            WHEN regexp_replace(id::text, '[^0-9]', '', 'g') ~ '^[0-9]+$' 
+                            THEN CAST(regexp_replace(id::text, '[^0-9]', '', 'g') AS INTEGER) 
+                            ELSE 0 
+                        END
+                    ), 
+                    0
+                ) + 1 AS nid 
+                FROM patients
+            """).fetchone()
             next_num = result['nid']
             return f'P{next_num:03d}'
         finally:
@@ -207,17 +212,10 @@ class Patient:
     def updated_since(timestamp):
         db = get_db()
         try:
-            from database import has_column
-            if has_column('patients', 'updated_at'):
-                rows = db.execute(
-                    "SELECT * FROM patients WHERE COALESCE(updated_at, created_at) > %s ORDER BY COALESCE(updated_at, created_at)",
-                    (timestamp,)
-                ).fetchall()
-            else:
-                rows = db.execute(
-                    "SELECT * FROM patients WHERE created_at > %s ORDER BY created_at",
-                    (timestamp,)
-                ).fetchall()
+            rows = db.execute(
+                "SELECT * FROM patients WHERE created_at > %s ORDER BY created_at",
+                (timestamp,)
+            ).fetchall()
             return [Patient.dict_from_row(r) for r in rows]
         finally:
             db.close()

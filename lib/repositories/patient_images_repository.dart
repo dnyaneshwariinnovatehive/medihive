@@ -6,12 +6,6 @@ import '../utils/helpers.dart';
 class PatientImagesRepository {
   Future<Database> get _db async => DatabaseHelper().database;
 
-  Future<bool> _hasColumn(String tableName, String columnName) async {
-    final db = await _db;
-    final columns = await db.rawQuery('PRAGMA table_info($tableName)');
-    return columns.any((c) => c['name'] == columnName);
-  }
-
   Future<List<Map<String, dynamic>>> getAll() async {
     final db = await _db;
     return db.query(tablePatientImages, orderBy: 'id ASC');
@@ -71,7 +65,6 @@ class PatientImagesRepository {
 
   Future<int> insert(Map<String, dynamic> row) async {
     final db = await _db;
-    final hasClinicId = await _hasColumn(tablePatientImages, 'clinic_id');
     final data = <String, dynamic>{
       'patient_id': row['patient_id'],
       'opd_visit_id': row['opd_visit_id'],
@@ -82,9 +75,6 @@ class PatientImagesRepository {
       'created_at': row['created_at'],
       'drive_url': row['drive_url'],
     };
-    if (hasClinicId) {
-      data['clinic_id'] = row['clinic_id'] ?? '';
-    }
     return db.insert(tablePatientImages, data);
   }
 

@@ -36,6 +36,22 @@ def _sync_opd_to_sheets(opd, image_links=None):
         opd_id, patient_id, bool(image_links),
     )
 
+    if image_links is None:
+        try:
+            existing_images = PatientImage.all(
+                patient_id=patient_id, opd_visit_id=opd_id
+            )
+            image_links = [img['drive_url'] for img in existing_images if img.get('drive_url')]
+            if image_links:
+                logger.info(
+                    "Restored %d existing image link(s) from patient_images for OPD %s",
+                    len(image_links), opd_id,
+                )
+        except Exception as e:
+            logger.warning(
+                "Could not query patient_images for OPD %s: %s", opd_id, e,
+            )
+
     patient = Patient.get(patient_id)
     if not patient:
         logger.warning(

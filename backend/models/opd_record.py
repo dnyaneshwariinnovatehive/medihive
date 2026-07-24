@@ -54,11 +54,15 @@ class OPDRecord:
         return OPDRecord.get(opd_id)
 
     @staticmethod
-    @staticmethod
     def _next_id():
         db = get_db()
         try:
-            row = db.execute("SELECT COALESCE(MAX(id), 0) + 1 AS nid FROM opd_visits").fetchone()
+            row = db.execute("""
+                SELECT COALESCE(
+                    MAX(CASE WHEN id::text ~ '^[0-9]+$' THEN CAST(id::text AS INTEGER) ELSE 0 END),
+                    0
+                ) + 1 AS nid FROM opd_visits
+            """).fetchone()
             return row['nid']
         finally:
             db.close()
@@ -120,10 +124,6 @@ class OPDRecord:
         if not fields:
             return OPDRecord.get(record_id)
         now = datetime.utcnow().isoformat()
-        from database import has_column
-        if has_column('opd_visits', 'updated_at'):
-            fields.append("updated_at = %s")
-            values.append(now)
 
         if isinstance(record_id, int) or (isinstance(record_id, str) and record_id.isdigit()):
             where_clause = "WHERE id = %s"
@@ -175,17 +175,10 @@ class OPDRecord:
     def updated_since(timestamp):
         db = get_db()
         try:
-            from database import has_column
-            if has_column('opd_visits', 'updated_at'):
-                rows = db.execute(
-                    "SELECT * FROM opd_visits WHERE COALESCE(updated_at, created_at) > %s ORDER BY COALESCE(updated_at, created_at)",
-                    (timestamp,)
-                ).fetchall()
-            else:
-                rows = db.execute(
-                    "SELECT * FROM opd_visits WHERE created_at > %s ORDER BY created_at",
-                    (timestamp,)
-                ).fetchall()
+            rows = db.execute(
+                "SELECT * FROM opd_visits WHERE created_at > %s ORDER BY created_at",
+                (timestamp,)
+            ).fetchall()
             return [OPDRecord.dict_from_row(r) for r in rows]
         finally:
             db.close()

@@ -77,7 +77,6 @@ class PatientRepository {
       'blood_group',
       'address',
       'created_at',
-      'weight',
     };
     return {
       for (final entry in row.entries)

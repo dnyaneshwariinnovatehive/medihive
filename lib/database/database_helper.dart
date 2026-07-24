@@ -217,7 +217,6 @@ class DatabaseHelper {
             'blood_group',
             'address',
             'created_at',
-            'weight',
           ],
         );
       }
