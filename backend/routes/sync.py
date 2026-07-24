@@ -389,22 +389,36 @@ def sync_upload_images(opd_id):
 
     from drive_utils import upload_image_fileobj_to_drive, upload_images_to_drive, check_existing_drive_files
 
-    if IS_CLOUD:
-        logger.info("CLOUD MODE: uploading %d image(s) directly to Drive for OPD %s",
-                    len(files), opd_id)
-        drive_urls = []
-        for i, f in enumerate(files, 1):
-            url = upload_image_fileobj_to_drive(opd_id, f, i)
-            if url:
-                drive_urls.append(url)
-    else:
-        logger.info("LOCAL MODE: saving %d image(s) to disk for OPD %s", len(files), opd_id)
-        saved_paths = save_images_locally(opd_id, files)
+    drive_urls = []
+    try:
+        if IS_CLOUD:
+            logger.info("CLOUD MODE: uploading %d image(s) directly to Drive for OPD %s",
+                        len(files), opd_id)
+            for i, f in enumerate(files, 1):
+                url = upload_image_fileobj_to_drive(opd_id, f, i)
+                if url:
+                    drive_urls.append(url)
+        else:
+            logger.info("LOCAL MODE: saving %d image(s) to disk for OPD %s", len(files), opd_id)
+            saved_paths = save_images_locally(opd_id, files)
 
-        drive_urls = check_existing_drive_files(opd_id, visit_date, len(saved_paths))
-        if not drive_urls:
-            image_records = [_ImageRecord(p) for p in saved_paths]
-            drive_urls = upload_images_to_drive(opd_id, image_records, visit_date)
+            drive_urls = check_existing_drive_files(opd_id, visit_date, len(saved_paths))
+            if not drive_urls:
+                image_records = [_ImageRecord(p) for p in saved_paths]
+                drive_urls = upload_images_to_drive(opd_id, image_records, visit_date)
+    except Exception as e:
+        logger.error(
+            "DRIVE UPLOAD FAILED for OPD %s: %s",
+            opd_id, e,
+            exc_info=True,
+        )
+        return jsonify({
+            'error': f'Image upload to Drive failed: {e}',
+            'opd_id': opd_id,
+            'image_count': 0,
+            'drive_urls': [],
+            'images_uploaded': False,
+        }), 500
 
     if not drive_urls:
         logger.error("IMAGE UPLOAD FAILED: No Drive URLs generated for OPD %s", opd_id)

@@ -707,12 +707,7 @@ class SyncManager extends ChangeNotifier {
         _imageUploadRetries[opdId] = retries;
         print('IMAGES: retry count for OPD $opdId: $retries/3');
         if (retries >= 3) {
-          print('IMAGES: giving up on OPD $opdId image after $retries failures');
-          final docBox = Hive.box('opd_documents');
-          if (docBox.containsKey(opdId)) {
-            await docBox.delete(opdId);
-            print('IMAGES: removed stale Hive entry for OPD $opdId');
-          }
+          print('IMAGES: giving up on OPD $opdId image after $retries failures — keeping Hive entry for manual retry');
           _imageUploadRetries.remove(opdId);
         }
       }

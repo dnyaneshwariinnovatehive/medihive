@@ -34,19 +34,32 @@ class GoogleAuthService:
         )
 
     def get_credentials(self) -> Credentials | None:
-        """Load and return credentials from drive_token.json.
+        """Load and return credentials from drive_token.json or DRIVE_TOKEN_JSON env var.
 
+        Falls back to the ``DRIVE_TOKEN_JSON`` environment variable when
+        the token file is missing (useful in cloud/deployed environments).
         Automatically refreshes the token if it is expired and a
-        refresh token is available.  Returns ``None`` when the token
-        file is missing or cannot be parsed.
+        refresh token is available.  Returns ``None`` when both the
+        token file and env var are missing or cannot be parsed.
         """
-        if not os.path.exists(self._token_path):
-            return None
+        token_data = None
 
-        try:
-            with open(self._token_path) as f:
-                token_data = json.load(f)
-        except (json.JSONDecodeError, OSError):
+        if os.path.exists(self._token_path):
+            try:
+                with open(self._token_path) as f:
+                    token_data = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                token_data = None
+
+        if token_data is None:
+            env_json = os.environ.get('DRIVE_TOKEN_JSON', '')
+            if env_json:
+                try:
+                    token_data = json.loads(env_json)
+                except json.JSONDecodeError:
+                    token_data = None
+
+        if token_data is None:
             return None
 
         creds = Credentials(
