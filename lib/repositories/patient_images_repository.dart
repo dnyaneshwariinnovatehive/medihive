@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 import '../database/database_helper.dart';
 import '../database/schema.dart';
+import '../utils/helpers.dart';
 
 class PatientImagesRepository {
   Future<Database> get _db async => DatabaseHelper().database;
@@ -49,7 +50,7 @@ class PatientImagesRepository {
       "SELECT DISTINCT opd_visit_id FROM $tablePatientImages "
       "WHERE sync_status = 'pending' OR sync_status IS NULL",
     );
-    return result.map((r) => r['opd_visit_id'] as int).toList();
+    return result.map((r) => Helpers.toInt(r['opd_visit_id'])).toList();
   }
 
   Future<int> markSyncedByOpdVisitId(int opdVisitId) async {
@@ -64,8 +65,7 @@ class PatientImagesRepository {
 
   Future<int> insert(Map<String, dynamic> row) async {
     final db = await _db;
-    return db.insert(tablePatientImages, {
-      'id': row['id'],
+    final data = <String, dynamic>{
       'patient_id': row['patient_id'],
       'opd_visit_id': row['opd_visit_id'],
       'file_path': row['file_path'],
@@ -74,7 +74,8 @@ class PatientImagesRepository {
       'uploaded_at': row['uploaded_at'],
       'created_at': row['created_at'],
       'drive_url': row['drive_url'],
-    });
+    };
+    return db.insert(tablePatientImages, data);
   }
 
   Future<int> update(int id, Map<String, dynamic> row) async {

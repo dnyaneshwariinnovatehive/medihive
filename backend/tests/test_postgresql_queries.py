@@ -28,9 +28,8 @@ def _init_test_schema():
 
     conn = psycopg2.connect(PG_TEST_URL)
     cur = conn.cursor()
-    cur.execute("DROP TABLE IF EXISTS cloud_sync_log, device_registry, clinics, settings, "
-                "last_sync, deleted_entities, fcm_tokens, users, appointments, "
-                "opd_records, patients CASCADE")
+    cur.execute("DROP TABLE IF EXISTS patient_images, users, "
+                "opd_visits, patients, calendar_notes, clinic_settings, medicines, symptoms_master, sync_queue CASCADE")
     conn.commit()
     cur.close()
     conn.close()
@@ -82,9 +81,8 @@ class TestPostgreSQLQueryPatterns(unittest.TestCase):
             WHERE table_schema = 'public'
         """)
         tables = {r[0] for r in self.pg_cur.fetchall()}
-        expected = {'patients', 'opd_records', 'appointments', 'users',
-                    'fcm_tokens', 'deleted_entities', 'last_sync', 'settings',
-                    'clinics', 'device_registry', 'cloud_sync_log'}
+        expected = {'patients', 'opd_visits', 'users', 'patient_images',
+                    'calendar_notes', 'clinic_settings', 'medicines', 'symptoms_master', 'sync_queue'}
         missing = expected - tables
         assert not missing, f"Missing tables: {missing}"
 
@@ -106,12 +104,11 @@ class TestPostgreSQLQueryPatterns(unittest.TestCase):
         now = datetime.utcnow().isoformat()
         db = get_db()
         db.execute("""
-            INSERT INTO patients (id, name, dob, age, gender, blood_group, mobile,
-                                  address, last_diagnosis, last_visit_date,
-                                  created_at, updated_at, is_synced, user_id, clinic_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s)
-        """, ('P001', 'Test Patient', '1990-01-01', 34, 'Male', 'O+', '1234567890',
-              'Test Address', '', '', now, now, '', 'CLI001'))
+            INSERT INTO patients (id, full_name, dob, age, gender, blood_group, mobile_number, alternate_mobile,
+                                  address, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, ('P001', 'Test Patient', '1990-01-01', 34, 'Male', 'O+', '1234567890', '',
+              'Test Address', now))
         db.commit()
         db.close()
 
@@ -119,16 +116,14 @@ class TestPostgreSQLQueryPatterns(unittest.TestCase):
         row = db.execute("SELECT * FROM patients WHERE id = %s", ('P001',)).fetchone()
         db.close()
         assert row is not None
-        assert row['name'] == 'Test Patient'
-        assert row['clinic_id'] == 'CLI001'
+        assert row['full_name'] == 'Test Patient'
 
     def test_04_patient_update_dynamic_fields(self):
         from database import get_db
-        now = datetime.utcnow().isoformat()
         db = get_db()
         # Simulate the dynamic UPDATE pattern used in patient.py
-        fields = ["name = %s", "age = %s", "updated_at = %s"]
-        values = ['Updated Name', 35, now]
+        fields = ["full_name = %s", "age = %s"]
+        values = ['Updated Name', 35]
         values.append('P001')
         db.execute(
             f"UPDATE patients SET {', '.join(fields)} WHERE id = %s",
@@ -138,9 +133,9 @@ class TestPostgreSQLQueryPatterns(unittest.TestCase):
         db.close()
 
         db = get_db()
-        row = db.execute("SELECT name, age FROM patients WHERE id = %s", ('P001',)).fetchone()
+        row = db.execute("SELECT full_name, age FROM patients WHERE id = %s", ('P001',)).fetchone()
         db.close()
-        assert row['name'] == 'Updated Name'
+        assert row['full_name'] == 'Updated Name'
         assert row['age'] == 35
 
     def test_05_patient_assign_next_id(self):
@@ -156,21 +151,19 @@ class TestPostgreSQLQueryPatterns(unittest.TestCase):
         next_id = int(result['nid'])
         assert next_id > 0, f"Expected positive next_id, got {next_id}"
 
-    def test_06_patient_delete_with_deleted_entity(self):
+    def test_06_patient_delete(self):
         from database import get_db
-        from datetime import datetime
         now = datetime.utcnow().isoformat()
         db = get_db()
-        db.execute(
-            "INSERT INTO deleted_entities (entity_type, entity_id, deleted_at, user_id, clinic_id) "
-            "VALUES (%s, %s, %s, %s, %s)",
-            ('patient', 'P001', now, '', 'CLI001')
-        )
+        db.execute("""
+            INSERT INTO patients (id, full_name, created_at)
+            VALUES (%s, %s, %s) ON CONFLICT DO NOTHING
+        """, ('P_DEL', 'Delete Test', now))
         db.commit()
         db.close()
 
         db = get_db()
-        db.execute("DELETE FROM patients WHERE id = %s", ('P001',))
+        db.execute("DELETE FROM patients WHERE id = %s", ('P_DEL',))
         db.commit()
         db.close()
 
@@ -182,79 +175,37 @@ class TestPostgreSQLQueryPatterns(unittest.TestCase):
         # Re-insert patient for FK
         db = get_db()
         db.execute("""
-            INSERT INTO patients (id, name, created_at, updated_at, is_synced, clinic_id)
-            VALUES (%s, %s, %s, %s, 0, %s) ON CONFLICT DO NOTHING
-        """, ('P002', 'OPD Patient', now, now, 'CLI001'))
+            INSERT INTO patients (id, full_name, created_at)
+            VALUES (%s, %s, %s) ON CONFLICT DO NOTHING
+        """, ('P002', 'OPD Patient', now))
         db.commit()
         db.close()
 
         db = get_db()
         db.execute("""
-            INSERT INTO opd_records
-                (id, patient_id, type, symptoms, diagnosis, medicines,
-                 visit_date, clinical_notes, consultation_fee, medicine_fee,
-                 discount, payment_mode, charge_type, previous_visit_date,
-                 follow_up_reason, next_visit, blood_group, image_links,
-                 created_at, updated_at, is_synced, user_id, clinic_id)
+            INSERT INTO opd_visits
+                (id, patient_id, opd_type, symptoms, diagnosis, medicines,
+                 visit_datetime, clinical_notes, consultation_fee, medicine_fee,
+                 discount_value, payment_mode, charge_type,
+                 followup_status, next_visit_date,
+                 created_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, 0, %s, %s)
+                    %s, %s, %s, %s, %s,
+                    %s)
         """, ('OPD001', 'P002', 'consultation', 'cough', 'cold', 'medicine',
-              now, '', '100', '50', '0', 'cash', 'general', '',
-              '', '', '', '',
-              now, now, '', 'CLI001'))
+              now, '', '100', '50', '0', 'cash', 'general',
+              '', '',
+              now))
         db.commit()
         db.close()
 
         db = get_db()
         row = db.execute(
-            "SELECT * FROM opd_records WHERE id = %s", ('OPD001',)
+            "SELECT * FROM opd_visits WHERE id = %s", ('OPD001',)
         ).fetchone()
         db.close()
         assert row is not None
         assert row['patient_id'] == 'P002'
-
-    def test_08_opd_set_image_links(self):
-        from database import get_db
-        now = datetime.utcnow().isoformat()
-        db = get_db()
-        db.execute(
-            "UPDATE opd_records SET image_links = %s, updated_at = %s WHERE id = %s",
-            ('http://example.com/img1', now, 'OPD001')
-        )
-        db.commit()
-        db.close()
-
-        db = get_db()
-        row = db.execute(
-            "SELECT image_links FROM opd_records WHERE id = %s", ('OPD001',)
-        ).fetchone()
-        db.close()
-        assert row['image_links'] == 'http://example.com/img1'
-
-    # ── Appointment Model ───────────────────────
-
-    def test_09_appointment_insert_and_date_cast(self):
-        from database import get_db
-        now = datetime.utcnow().isoformat()
-        db = get_db()
-        db.execute("""
-            INSERT INTO appointments (id, patient_id, patient_name, date_time, notes,
-                                       created_at, updated_at, is_synced, user_id, clinic_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, 0, %s, %s)
-        """, ('APT001', 'P002', 'Appt Patient', '2026-07-02T10:00:00', 'notes',
-              now, now, '', 'CLI001'))
-        db.commit()
-        db.close()
-
-        # Test the CAST(date_time AS DATE) pattern
-        db = get_db()
-        rows = db.execute(
-            "SELECT * FROM appointments WHERE CAST(date_time AS DATE) = %s ORDER BY date_time",
-            ('2026-07-02',)
-        ).fetchall()
-        db.close()
-        assert len(rows) >= 1
 
     # ── ON CONFLICT Patterns (sync) ─────────────
 
@@ -263,41 +214,16 @@ class TestPostgreSQLQueryPatterns(unittest.TestCase):
         now = datetime.utcnow().isoformat()
         db = get_db()
         db.execute("""
-            INSERT INTO patients (id, name, created_at, updated_at, is_synced)
-            VALUES (%s, %s, %s, %s, 0) ON CONFLICT DO NOTHING
-        """, ('P002', 'Existing Patient', now, now))
+            INSERT INTO patients (id, full_name, created_at)
+            VALUES (%s, %s, %s) ON CONFLICT DO NOTHING
+        """, ('P002', 'Existing Patient', now))
         db.commit()
         db.close()
         # Verify no duplicate error, same row
         db = get_db()
-        row = db.execute("SELECT name FROM patients WHERE id = %s", ('P002',)).fetchone()
+        row = db.execute("SELECT full_name FROM patients WHERE id = %s", ('P002',)).fetchone()
         db.close()
-        assert row['name'] == 'OPD Patient'
-
-    def test_11_on_conflict_do_update(self):
-        """Test the INSERT ... ON CONFLICT (key) DO UPDATE SET ... = EXCLUDED.value pattern."""
-        from database import get_db
-        db = get_db()
-        db.execute(
-            "INSERT INTO settings (key, value) VALUES (%s, %s) "
-            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-            ('spreadsheet_id', 'test_sheet_123')
-        )
-        db.commit()
-
-        # Update same key
-        db.execute(
-            "INSERT INTO settings (key, value) VALUES (%s, %s) "
-            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-            ('spreadsheet_id', 'test_sheet_456')
-        )
-        db.commit()
-
-        row = db.execute(
-            "SELECT value FROM settings WHERE key = %s", ('spreadsheet_id',)
-        ).fetchone()
-        db.close()
-        assert row['value'] == 'test_sheet_456'
+        assert row['full_name'] == 'OPD Patient'
 
     # ── RETURNING Pattern (auth registration) ───
 
@@ -309,148 +235,15 @@ class TestPostgreSQLQueryPatterns(unittest.TestCase):
         hashed = hashlib.sha256('test123'.encode()).hexdigest()
         db = get_db()
         row = db.execute(
-            "INSERT INTO users (username, password, name, created_at) "
+            "INSERT INTO users (username, password_hash, email, created_at) "
             "VALUES (%s, %s, %s, %s) RETURNING id",
-            (username, hashed, 'Test User', now)
+            (username, hashed, 'test@example.com', now)
         ).fetchone()
         db.commit()
         db.close()
         assert row is not None
         assert 'id' in row
         assert int(row['id']) > 0
-
-    # ── NOW() Pattern (FCM service) ─────────────
-
-    def test_13_now_function(self):
-        from database import get_db
-        db = get_db()
-        db.execute(
-            "INSERT INTO fcm_tokens (fcm_token, user_id, created_at, updated_at) "
-            "VALUES (%s, %s, NOW(), NOW())",
-            ('test_fcm_token', 'user1')
-        )
-        db.commit()
-
-        row = db.execute(
-            "SELECT created_at FROM fcm_tokens WHERE fcm_token = %s",
-            ('test_fcm_token',)
-        ).fetchone()
-        db.close()
-        assert row is not None
-        assert row['created_at'] is not None
-
-    # ── Clinic Model ────────────────────────────
-
-    def test_14_clinic_assign_next_id(self):
-        from database import get_db
-        db = get_db()
-        result = db.execute(
-            "SELECT id FROM clinics WHERE id LIKE 'CLI%%' ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        db.close()
-        # CLI001 may or may not exist — just ensure query runs
-        assert result is not None or result is None  # query never errors
-
-    # ── Device Registry ─────────────────────────
-
-    def test_15_device_registry_insert_select(self):
-        from database import get_db
-        now = datetime.utcnow().isoformat()
-        db = get_db()
-        existing = db.execute(
-            "SELECT id FROM device_registry WHERE device_id = %s", ('DEVICE001',)
-        ).fetchone()
-        if not existing:
-            db.execute("""
-                INSERT INTO device_registry
-                    (device_id, device_name, clinic_id, fcm_token, app_version,
-                     last_seen, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, ('DEVICE001', 'Test Device', 'CLI001', '', '1.0', now, now, now))
-            db.commit()
-        else:
-            db.execute("""
-                UPDATE device_registry
-                SET device_name = %s, clinic_id = %s, fcm_token = %s,
-                    app_version = %s, last_seen = %s, updated_at = %s
-                WHERE device_id = %s
-            """, ('Test Device', 'CLI001', '', '1.0', now, now, 'DEVICE001'))
-            db.commit()
-        db.close()
-
-        db = get_db()
-        row = db.execute(
-            "SELECT * FROM device_registry WHERE device_id = %s", ('DEVICE001',)
-        ).fetchone()
-        db.close()
-        assert row is not None
-        assert row['device_name'] == 'Test Device'
-
-    # ── Deleted Entity ──────────────────────────
-
-    def test_16_deleted_entity_since(self):
-        from database import get_db
-        now = datetime.utcnow().isoformat()
-        db = get_db()
-        db.execute(
-            "INSERT INTO deleted_entities (entity_type, entity_id, deleted_at, user_id, clinic_id) "
-            "VALUES (%s, %s, %s, %s, %s)",
-            ('opd_visit', 'OPD_DEL_001', now, '', 'CLI001')
-        )
-        db.commit()
-
-        rows = db.execute(
-            "SELECT entity_type, entity_id, deleted_at FROM deleted_entities "
-            "WHERE deleted_at > %s AND clinic_id = %s ORDER BY deleted_at",
-            ('2000-01-01T00:00:00', 'CLI001')
-        ).fetchall()
-        db.close()
-        assert len(rows) >= 1
-
-    # ── Cloud Sync Log ──────────────────────────
-
-    def test_17_cloud_sync_log_insert(self):
-        from database import get_db
-        now = datetime.utcnow().isoformat()
-        db = get_db()
-        db.execute(
-            "INSERT INTO cloud_sync_log (clinic_id, device_id, direction, patients_count, "
-            "opd_count, appointments_count, deleted_count, status, error_message, created_at) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            ('CLI001', 'DEVICE001', 'upload', 1, 2, 0, 0, 'success', '', now)
-        )
-        db.commit()
-        db.close()
-
-    # ── COALESCE Pattern (FCM) ──────────────────
-
-    def test_18_coalesce_pattern(self):
-        """Test UPDATE with COALESCE(user_id, existing_value)."""
-        from database import get_db
-        db = get_db()
-        # Insert with user_id=NULL
-        db.execute(
-            "INSERT INTO fcm_tokens (fcm_token, user_id, created_at, updated_at) "
-            "VALUES (%s, %s, NOW(), NOW())",
-            ('coalesce_test_token', None)
-        )
-        db.commit()
-
-        # Update — COALESCE(NULL, user_id) should keep existing NULL
-        db.execute(
-            "UPDATE fcm_tokens SET updated_at = NOW(), user_id = COALESCE(%s, user_id) "
-            "WHERE fcm_token = %s",
-            (None, 'coalesce_test_token')
-        )
-        db.commit()
-
-        row = db.execute(
-            "SELECT user_id FROM fcm_tokens WHERE fcm_token = %s",
-            ('coalesce_test_token',)
-        ).fetchone()
-        db.close()
-        # user_id should be NULL (None in Python) or empty string
-        assert row['user_id'] is None or row['user_id'] == ''
 
     # ── LIKE Pattern ────────────────────────────
 
@@ -469,7 +262,7 @@ class TestPostgreSQLQueryPatterns(unittest.TestCase):
         from database import get_db
         db = get_db()
         rows = db.execute(
-            "SELECT id FROM opd_records WHERE patient_id = %s", ('P002',)
+            "SELECT id FROM opd_visits WHERE patient_id = %s", ('P002',)
         ).fetchall()
         db.close()
         assert len(rows) >= 1
@@ -506,13 +299,13 @@ class TestDatabaseConnectionWrapper(unittest.TestCase):
     def test_multiple_statements_in_transaction(self):
         from database import get_db
         db = get_db()
-        db.execute("DELETE FROM settings")
-        db.execute("INSERT INTO settings (key, value) VALUES (%s, %s)",
-                   ('multi_test_key', 'value1'))
-        db.execute("INSERT INTO settings (key, value) VALUES (%s, %s)",
-                   ('multi_test_key2', 'value2'))
+        db.execute("DELETE FROM sync_queue WHERE entity_id LIKE 'multi_test_%%'")
+        db.execute("INSERT INTO sync_queue (entity_type, entity_id, status) VALUES (%s, %s, %s)",
+                   ('patient', 'multi_test_key', 'PENDING'))
+        db.execute("INSERT INTO sync_queue (entity_type, entity_id, status) VALUES (%s, %s, %s)",
+                   ('patient', 'multi_test_key2', 'PENDING'))
         db.commit()
 
-        rows = db.execute("SELECT COUNT(*) AS cnt FROM settings WHERE key LIKE 'multi_test_%%'").fetchall()
+        rows = db.execute("SELECT COUNT(*) AS cnt FROM sync_queue WHERE entity_id LIKE 'multi_test_%%'").fetchall()
         assert rows[0]['cnt'] >= 2
         db.close()

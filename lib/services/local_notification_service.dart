@@ -46,17 +46,6 @@ class LocalNotificationService {
     return true;
   }
 
-  Future<bool> _checkExactAlarmPermission() async {
-    final android = sharedNotificationPlugin.resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin>();
-    if (android == null) return false;
-    try {
-      return await android.requestExactAlarmsPermission() ?? false;
-    } catch (_) {
-      return false;
-    }
-  }
-
   Future<void> scheduleAppointmentReminder({
     required String id,
     required String patientName,

@@ -15,7 +15,13 @@ import '../repositories/patient_repository.dart';
 import '../repositories/opd_record_repository.dart';
 import '../repositories/sync_queue_repository.dart';
 import '../repositories/patient_images_repository.dart';
+import '../repositories/calendar_notes_repository.dart';
+import '../repositories/clinic_settings_repository.dart';
+import '../repositories/medicines_repository.dart';
+import '../repositories/symptoms_master_repository.dart';
+import 'local_notification_service.dart';
 import '../database/database_helper.dart';
+import '../utils/helpers.dart';
 
 enum SyncState {
   offline,
@@ -55,6 +61,7 @@ class SyncManager extends ChangeNotifier {
   static final GlobalKey<ScaffoldMessengerState> scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
 
   SyncState _syncState = SyncState.synced;
+  bool _pendingSyncRequested = false;
   Timer? _debounceTimer;
   Timer? _pollTimer;
   StreamSubscription<bool>? _connectivitySubscription;
@@ -71,6 +78,10 @@ class SyncManager extends ChangeNotifier {
   final OpdRecordRepository _opdRepo = _tryInit('OpdRecordRepository', () => OpdRecordRepository());
   final SyncQueueRepository _syncQueueRepo = _tryInit('SyncQueueRepository', () => SyncQueueRepository());
   final PatientImagesRepository _patientImagesRepo = _tryInit('PatientImagesRepository', () => PatientImagesRepository());
+  final CalendarNotesRepository _calendarNotesRepo = _tryInit('CalendarNotesRepository', () => CalendarNotesRepository());
+  final ClinicSettingsRepository _clinicSettingsRepo = _tryInit('ClinicSettingsRepository', () => ClinicSettingsRepository());
+  final MedicinesRepository _medicinesRepo = _tryInit('MedicinesRepository', () => MedicinesRepository());
+  final SymptomsMasterRepository _symptomsRepo = _tryInit('SymptomsMasterRepository', () => SymptomsMasterRepository());
   int _cachedUnsyncedCount = 0;
 
   static final SyncManager _instance = _tryInit('SyncManager._instance', () => SyncManager._internal());
@@ -195,6 +206,14 @@ class SyncManager extends ChangeNotifier {
 
       _syncState = SyncState.synced;
       notifyListeners();
+
+      // If a forceSyncNow was requested while we were syncing, run again
+      if (_pendingSyncRequested) {
+        _pendingSyncRequested = false;
+        debugPrint('SYNC running deferred sync from pendingSyncRequested');
+        _trySync(); // fire-and-forget to avoid deep recursion
+      }
+
       debugPrint('========== SYNC COMPLETE ==========');
     } catch (e) {
       debugPrint('SyncManager._trySync failed: $e');
@@ -227,7 +246,7 @@ class SyncManager extends ChangeNotifier {
   Future<String> _patientSyncId(Map<String, dynamic> row) async {
     final syncId = row['sync_id'] as String?;
     if (syncId != null && syncId.isNotEmpty) return syncId;
-    return _patientToStringId(row['id'] as int);
+    return _patientToStringId(Helpers.toInt(row['id']));
   }
 
   Future<Map<String, dynamic>> _patientRowToPushMap(Map<String, dynamic> row) async {
@@ -235,12 +254,13 @@ class SyncManager extends ChangeNotifier {
     final createdDt = DateTime.tryParse(createdAt) ?? DateTime.now();
     return {
       'id': await _patientSyncId(row),
-      'name': row['full_name'],
+      'full_name': row['full_name'],
       'dob': row['dob'] ?? '',
       'age': row['age'] ?? 0,
       'gender': row['gender'] ?? 'Not Specified',
       'blood_group': row['blood_group'] ?? 'Not Specified',
-      'mobile': row['mobile_number'],
+      'mobile_number': row['mobile_number'],
+      'alternate_mobile': row['alternate_mobile'],
       'address': row['address'] ?? '',
       'created_at': createdDt.toIso8601String(),
       'updated_at': _resolveUpdatedAt(row),
@@ -252,7 +272,7 @@ class SyncManager extends ChangeNotifier {
     final createdAt = row['created_at'] as String? ?? '';
     final createdDt = DateTime.tryParse(createdAt) ?? DateTime.now();
     final visitDt = row['visit_datetime'] as String? ?? '';
-    final localPatientId = row['patient_id'] as int? ?? 0;
+    final localPatientId = Helpers.toInt(row['patient_id']);
     String patientSyncId;
     String patientBloodGroup = '';
     try {
@@ -265,26 +285,26 @@ class SyncManager extends ChangeNotifier {
     final pkNotes = row['panchakarma_notes'] ?? '';
     print('SYNC DEBUG: _opdRowToPushMap panchakarma_notes="${pkNotes}"');
     return {
-      'id': row['opd_id']?.toString() ?? _opdToStringId(row['id'] as int),
+      'id': row['opd_id']?.toString() ?? _opdToStringId(Helpers.toInt(row['id'])),
       'patient_id': patientSyncId,
-      'type': row['opd_type'] ?? 'consultation',
+      'opd_type': row['opd_type'] ?? 'consultation',
       'symptoms': row['symptoms'] ?? '',
       'diagnosis': row['diagnosis'] ?? '',
       'medicines': row['medicines'] ?? '',
-      'visit_date': DateTime.tryParse(visitDt)?.toIso8601String() ?? createdDt.toIso8601String(),
+      'visit_datetime': DateTime.tryParse(visitDt)?.toIso8601String() ?? createdDt.toIso8601String(),
       'clinical_notes': row['clinical_notes'] ?? '',
       'panchakarma_notes': pkNotes,
-      'consultation_fee': (row['consultation_fee'] as num?)?.toString() ?? '',
-      'medicine_fee': (row['medicine_fee'] as num?)?.toString() ?? '',
-      'panchakarma_fee': (row['panchakarma_fee'] as num?)?.toString() ?? '',
-      'total_fee': (row['total_fee'] as num?)?.toString() ?? '',
-      'discount': (row['discount_value'] as num?)?.toString() ?? '',
+      'consultation_fee': row['consultation_fee']?.toString() ?? '',
+      'medicine_fee': row['medicine_fee']?.toString() ?? '',
+      'panchakarma_fee': row['panchakarma_fee']?.toString() ?? '',
+      'total_fee': row['total_fee']?.toString() ?? '',
+      'discount_value': row['discount_value']?.toString() ?? '',
       'discount_type': row['discount_type'] ?? '',
       'payment_mode': row['payment_mode'] ?? '',
       'charge_type': row['charge_type'] ?? '',
       'previous_visit_date': '',
-      'follow_up_reason': row['followup_status'] ?? '',
-      'next_visit': row['next_visit_date'] ?? '',
+      'followup_status': row['followup_status'] ?? '',
+      'next_visit_date': row['next_visit_date'] ?? '',
       'blood_group': patientBloodGroup,
       'created_at': createdDt.toIso8601String(),
       'updated_at': _resolveUpdatedAt(row),
@@ -298,9 +318,9 @@ class SyncManager extends ChangeNotifier {
     return {
       'id': sqliteId,
       'sync_id': syncId,
-      'full_name': remote['name']?.toString() ?? '',
-      'mobile_number': remote['mobile']?.toString() ?? '',
-      'alternate_mobile': null,
+      'full_name': remote['full_name']?.toString() ?? '',
+      'mobile_number': remote['mobile_number']?.toString() ?? '',
+      'alternate_mobile': remote['alternate_mobile']?.toString(),
       'gender': remote['gender']?.toString() ?? 'Not Specified',
       'dob': remote['dob']?.toString() ?? '',
       'age': int.tryParse(remote['age']?.toString() ?? '') ?? 0,
@@ -316,7 +336,7 @@ class SyncManager extends ChangeNotifier {
     int localPatientId;
     try {
       final patient = await _patientRepo.getBySyncId(remotePatientId);
-      localPatientId = patient?['id'] as int? ?? _toSqlitePatientId(remotePatientId);
+      localPatientId = Helpers.toInt(patient?['id'], _toSqlitePatientId(remotePatientId));
     } catch (_) {
       localPatientId = _toSqlitePatientId(remotePatientId);
     }
@@ -324,8 +344,8 @@ class SyncManager extends ChangeNotifier {
       'id': sqliteId,
       'opd_id': remote['id']?.toString() ?? '',
       'patient_id': localPatientId,
-      'visit_datetime': remote['visit_date']?.toString() ?? '',
-      'opd_type': remote['type']?.toString() ?? 'consultation',
+      'visit_datetime': remote['visit_datetime']?.toString() ?? '',
+      'opd_type': remote['opd_type']?.toString() ?? 'consultation',
       'charge_type': remote['charge_type']?.toString() ?? '',
       'diagnosis': remote['diagnosis']?.toString() ?? '',
       'symptoms': remote['symptoms']?.toString() ?? '',
@@ -334,9 +354,9 @@ class SyncManager extends ChangeNotifier {
       'consultation_fee': double.tryParse(remote['consultation_fee']?.toString() ?? '') ?? 0.0,
       'medicine_fee': double.tryParse(remote['medicine_fee']?.toString() ?? '') ?? 0.0,
       'payment_mode': remote['payment_mode']?.toString() ?? '',
-      'next_visit_date': remote['next_visit']?.toString() ?? '',
-      'followup_status': remote['follow_up_reason']?.toString() ?? '',
-      'discount_value': double.tryParse(remote['discount']?.toString() ?? '') ?? 0.0,
+      'next_visit_date': remote['next_visit_date']?.toString() ?? '',
+      'followup_status': remote['followup_status']?.toString() ?? '',
+      'discount_value': double.tryParse(remote['discount_value']?.toString() ?? '') ?? 0.0,
       'created_at': remote['created_at']?.toString() ?? DateTime.now().toIso8601String(),
       'updated_at': remote['updated_at']?.toString() ?? DateTime.now().toIso8601String(),
       'medicines': remote['medicines']?.toString() ?? '',
@@ -424,8 +444,64 @@ class SyncManager extends ChangeNotifier {
       }
     } catch (_) {}
 
+    // ── Build push data for new sync tables ─────────────────
+    final pushCalendarNotes = <Map<String, dynamic>>[];
+    final pushClinicSettings = <Map<String, dynamic>>[];
+    final pushMedicines = <Map<String, dynamic>>[];
+    final pushSymptoms = <Map<String, dynamic>>[];
+
+    // Always send all calendar_notes, clinic_settings, medicines, symptoms
+    // for full sync (these are small reference/singleton tables)
+    try {
+      final allNotes = await _calendarNotesRepo.getAll();
+      for (final note in allNotes) {
+        pushCalendarNotes.add(Map<String, dynamic>.from(note));
+      }
+    } catch (e) {
+      debugPrint('SYNC: error reading calendar_notes: $e');
+    }
+
+    try {
+      final settings = await _clinicSettingsRepo.getFirst();
+      if (settings != null) {
+        pushClinicSettings.add(Map<String, dynamic>.from(settings));
+      }
+    } catch (e) {
+      debugPrint('SYNC: error reading clinic_settings: $e');
+    }
+
+    try {
+      final allMeds = await _medicinesRepo.getAll();
+      for (final med in allMeds) {
+        pushMedicines.add(Map<String, dynamic>.from(med));
+      }
+    } catch (e) {
+      debugPrint('SYNC: error reading medicines: $e');
+    }
+
+    try {
+      final allSyms = await _symptomsRepo.getAll();
+      for (final sym in allSyms) {
+        pushSymptoms.add(Map<String, dynamic>.from(sym));
+      }
+    } catch (e) {
+      debugPrint('SYNC: error reading symptoms: $e');
+    }
+
     debugPrint('SYNC pushPatients=${pushPatients.length} pushOpd=${pushOpd.length} pushAppts=${pushAppts.length} pendingEntries=${pendingEntries.length}');
-    if (pushPatients.isNotEmpty || pushOpd.isNotEmpty || pushAppts.isNotEmpty) {
+    if (pushOpd.isNotEmpty) {
+      for (final opd in pushOpd) {
+        debugPrint('SYNC PUSH OPD: id=${opd['id']} patient_id=${opd['patient_id']} '
+            'diagnosis=${opd['diagnosis']} symptoms=${opd['symptoms']} '
+            'clinical_notes=${opd['clinical_notes']} panchakarma_notes=${opd['panchakarma_notes']} '
+            'consultation_fee=${opd['consultation_fee']} medicine_fee=${opd['medicine_fee']} '
+            'panchakarma_fee=${opd['panchakarma_fee']} total_fee=${opd['total_fee']} '
+            'discount_value=${opd['discount_value']} discount_type=${opd['discount_type']} '
+            'payment_mode=${opd['payment_mode']} followup_status=${opd['followup_status']} '
+            'next_visit_date=${opd['next_visit_date']} visit_datetime=${opd['visit_datetime']}');
+      }
+    }
+    if (pushPatients.isNotEmpty || pushOpd.isNotEmpty || pushAppts.isNotEmpty || pushCalendarNotes.isNotEmpty || pushClinicSettings.isNotEmpty || pushMedicines.isNotEmpty || pushSymptoms.isNotEmpty) {
       try {
         debugPrint('SYNC CALLING API SYNC PUSH');
         final pushResponse = await ApiService.syncPush(
@@ -433,6 +509,10 @@ class SyncManager extends ChangeNotifier {
           opdRecords: pushOpd,
           appointments: pushAppts,
           deletedEntities: deletedEntities,
+          calendarNotes: pushCalendarNotes,
+          clinicSettings: pushClinicSettings,
+          medicines: pushMedicines,
+          symptoms: pushSymptoms,
         );
         debugPrint('SYNC API SYNC PUSH SUCCESS');
 
@@ -467,7 +547,7 @@ class SyncManager extends ChangeNotifier {
         // Mark queue entries as synced
         final now = DateTime.now();
         for (final entry in pendingEntries) {
-          await _syncQueueRepo.update(entry['id'] as int, {
+          await _syncQueueRepo.update(Helpers.toInt(entry['id']), {
             'status': 'synced',
             'last_attempt': now.toIso8601String(),
           });
@@ -488,7 +568,7 @@ class SyncManager extends ChangeNotifier {
         for (final entry in pendingEntries) {
           final retryCount = (entry['retry_count'] as int? ?? 0) + 1;
           final status = retryCount >= 5 ? 'failed' : 'pending';
-          await _syncQueueRepo.update(entry['id'] as int, {
+          await _syncQueueRepo.update(Helpers.toInt(entry['id']), {
             'retry_count': retryCount,
             'status': status,
             'last_error': e.toString(),
@@ -502,7 +582,7 @@ class SyncManager extends ChangeNotifier {
       debugPrint('SYNC no pushable data — closing ${pendingEntries.length} entries');
       // No pushable data (all entities deleted) — close entries
       for (final entry in pendingEntries) {
-        await _syncQueueRepo.update(entry['id'] as int, {
+        await _syncQueueRepo.update(Helpers.toInt(entry['id']), {
           'status': 'synced',
           'last_attempt': DateTime.now().toIso8601String(),
         });
@@ -555,7 +635,7 @@ class SyncManager extends ChangeNotifier {
           }
           continue;
         }
-        final sqliteId = row['id'] as int;
+        final sqliteId = Helpers.toInt(row['id']);
         print('IMAGES: OPD $opdId found in local DB (sqlite_id=$sqliteId)');
 
         final pendingImages =
@@ -627,35 +707,27 @@ class SyncManager extends ChangeNotifier {
         _imageUploadRetries[opdId] = retries;
         print('IMAGES: retry count for OPD $opdId: $retries/3');
         if (retries >= 3) {
-          print('IMAGES: giving up on OPD $opdId image after $retries failures');
-          final docBox = Hive.box('opd_documents');
-          if (docBox.containsKey(opdId)) {
-            await docBox.delete(opdId);
-            print('IMAGES: removed stale Hive entry for OPD $opdId');
-          }
+          print('IMAGES: giving up on OPD $opdId image after $retries failures — keeping Hive entry for manual retry');
           _imageUploadRetries.remove(opdId);
         }
       }
     }
-
-    // ── Pull ─────────────────────────────────────────
+    // ── Pull ──
     debugPrint('SYNC PULL START (lastSync=$lastSync)');
 
-    // On first ever sync (fresh install), skip pull to avoid
-    // populating a new device with all remote cloud data.
-    // Subsequent syncs will pull incrementally using stored lastSync.
-    if (lastSync.isEmpty) {
-      debugPrint('SYNC PULL: first sync — skipping pull to keep fresh install clean');
-      final now = DateTime.now().toUtc().toIso8601String();
-      await prefs.setString('last_flask_sync', now);
-    } else {
-      try {
-        final data = await ApiService.syncPull(lastSync);
-        debugPrint('SYNC PULL SUCCESS');
+    final pullSync = lastSync.isEmpty ? '2000-01-01T00:00:00' : lastSync;
+    try {
+      final data = await ApiService.syncPull(pullSync);
+      debugPrint('SYNC PULL SUCCESS');
 
       final remotePatients = data['patients'] as List<dynamic>? ?? [];
       final remoteOpd = data['opd_records'] as List<dynamic>? ?? [];
       final remoteAppts = data['appointments'] as List<dynamic>? ?? [];
+      final remoteCalendarNotes = data['calendar_notes'] as List<dynamic>? ?? [];
+      final remoteClinicSettings = data['clinic_settings'] as List<dynamic>? ?? [];
+      final remoteMedicines = data['medicines'] as List<dynamic>? ?? [];
+      final remoteSymptoms = data['symptoms'] as List<dynamic>? ?? [];
+      final remotePatientImages = data['patient_images'] as List<dynamic>? ?? [];
 
       for (final json in remotePatients) {
         try {
@@ -671,7 +743,7 @@ class SyncManager extends ChangeNotifier {
           if (existing == null ||
               (remoteUpdatedAt != null && localUpdatedAt != null && remoteUpdatedAt.isAfter(localUpdatedAt))) {
             if (existing != null) {
-              final sqliteId = existing['id'] as int;
+              final sqliteId = Helpers.toInt(existing['id']);
               await _patientRepo.update(sqliteId, _remotePatientToRow(map, sqliteId, remoteId));
             } else {
               final maxId = await _patientRepo.getMaxId();
@@ -696,7 +768,7 @@ class SyncManager extends ChangeNotifier {
           if (existing == null ||
               (remoteUpdatedAt != null && localUpdatedAt != null && remoteUpdatedAt.isAfter(localUpdatedAt))) {
             final localId = existing != null
-                ? existing['id'] as int
+                ? Helpers.toInt(existing['id'])
                 : (await _opdRepo.getMaxId()) + 1;
             final row = await _remoteOpdToRow(map, localId);
             if (existing != null) {
@@ -706,16 +778,16 @@ class SyncManager extends ChangeNotifier {
             }
 
             // Ensure follow-up appointment in Hive if next_visit_date is set
-            final nextVisit = map['next_visit']?.toString() ?? '';
+            final nextVisit = map['next_visit_date']?.toString() ?? '';
             if (nextVisit.isNotEmpty) {
               final visitDate = DateTime.tryParse(nextVisit);
               if (visitDate != null) {
                 try {
                   final apptBox = Hive.box<AppointmentModel>('appointments');
                   final patientId = map['patient_id']?.toString() ?? '';
-                final apptId = 'followup_${remoteId}_$nextVisit';
-                if (!apptBox.containsKey(apptId)) {
-                    await apptBox.put(apptId, AppointmentModel(
+                  final apptId = 'followup_${remoteId}_$nextVisit';
+                  if (!apptBox.containsKey(apptId)) {
+                    final appt = AppointmentModel(
                       id: apptId,
                       patientId: patientId,
                       dateTime: visitDate,
@@ -723,8 +795,18 @@ class SyncManager extends ChangeNotifier {
                       isSynced: true,
                       createdAt: DateTime.now(),
                       updatedAt: DateTime.now(),
-                    ));
+                    );
+                    await apptBox.put(apptId, appt);
                     debugPrint('SYNC: created Hive follow-up appointment for OPD $remoteId');
+
+                    // Schedule local OS notification reminder for pulled follow-up
+                    if (visitDate.isAfter(DateTime.now())) {
+                      LocalNotificationService().scheduleAppointmentReminder(
+                        id: apptId,
+                        patientName: 'Patient $patientId',
+                        appointmentTime: visitDate,
+                      );
+                    }
                   }
                 } catch (_) {}
               }
@@ -741,12 +823,157 @@ class SyncManager extends ChangeNotifier {
           final remoteUpdatedAt = DateTime.tryParse(map['updated_at']?.toString() ?? '');
           if (existing == null ||
               (remoteUpdatedAt != null && existing.updatedAt.isBefore(remoteUpdatedAt))) {
-            apptBox.put(map['id'], AppointmentModel.fromJson(map));
+            final appt = AppointmentModel.fromJson(map);
+            apptBox.put(map['id'], appt);
+
+            // Schedule local OS notification reminder for pulled appointment
+            if (appt.dateTime.isAfter(DateTime.now())) {
+              LocalNotificationService().scheduleAppointmentReminder(
+                id: appt.id,
+                patientName: 'Patient ${appt.patientId}',
+                appointmentTime: appt.dateTime,
+              );
+            }
           }
         } catch (_) {}
       }
 
-      // ── Process deleted entities ────────────────────
+      // ── Process calendar_notes (last-write-wins) ──────
+      for (final json in remoteCalendarNotes) {
+        try {
+          final map = Map<String, dynamic>.from(json as Map);
+          final noteDate = map['note_date']?.toString() ?? '';
+          if (noteDate.isEmpty) continue;
+
+          final existing = await _calendarNotesRepo.getByDate(noteDate);
+          final remoteUpdatedAt = DateTime.tryParse(map['updated_at']?.toString() ?? '');
+          final localUpdatedAt = DateTime.tryParse(
+            existing?['updated_at'] as String? ?? existing?['created_at'] as String? ?? '',
+          );
+
+          if (existing == null ||
+              (remoteUpdatedAt != null && localUpdatedAt != null && remoteUpdatedAt.isAfter(localUpdatedAt))) {
+            final row = <String, dynamic>{
+              'note_date': noteDate,
+              'note_text': map['note_text']?.toString() ?? '',
+              'created_at': map['created_at']?.toString() ?? DateTime.now().toIso8601String(),
+              'updated_at': map['updated_at']?.toString() ?? DateTime.now().toIso8601String(),
+            };
+            if (existing != null) {
+              await _calendarNotesRepo.updateByDate(noteDate, row);
+            } else {
+              await _calendarNotesRepo.insert(row);
+            }
+            debugPrint('SYNC: pulled calendar note for $noteDate');
+          }
+        } catch (e) {
+          debugPrint('SYNC: calendar note pull error: $e');
+        }
+      }
+
+      // ── Process clinic_settings (singleton, last-write-wins) ──
+      for (final json in remoteClinicSettings) {
+        try {
+          final map = Map<String, dynamic>.from(json as Map);
+          final existing = await _clinicSettingsRepo.getFirst();
+          final remoteUpdatedAt = DateTime.tryParse(map['updated_at']?.toString() ?? '');
+          final localUpdatedAt = DateTime.tryParse(
+            existing?['updated_at'] as String? ?? existing?['created_at'] as String? ?? '',
+          );
+
+          if (existing == null ||
+              (remoteUpdatedAt != null && localUpdatedAt != null && remoteUpdatedAt.isAfter(localUpdatedAt))) {
+            if (existing != null) {
+              await _clinicSettingsRepo.update(Helpers.toInt(existing['id']), map);
+            } else {
+              await _clinicSettingsRepo.insert(map);
+            }
+            debugPrint('SYNC: pulled clinic settings');
+          }
+        } catch (e) {
+          debugPrint('SYNC: clinic settings pull error: $e');
+        }
+      }
+
+      // ── Process medicines (upsert by name) ────────────
+      for (final json in remoteMedicines) {
+        try {
+          final map = Map<String, dynamic>.from(json as Map);
+          final name = map['name']?.toString() ?? '';
+          if (name.isEmpty) continue;
+
+          final existing = await _medicinesRepo.getByName(name);
+          if (existing == null) {
+            await _medicinesRepo.insert({'name': name});
+            debugPrint('SYNC: pulled medicine $name');
+          }
+        } catch (e) {
+          debugPrint('SYNC: medicine pull error: $e');
+        }
+      }
+
+      // ── Process symptoms (upsert by name) ─────────────
+      for (final json in remoteSymptoms) {
+        try {
+          final map = Map<String, dynamic>.from(json as Map);
+          final name = map['name']?.toString() ?? '';
+          if (name.isEmpty) continue;
+
+          final existing = await _symptomsRepo.getByName(name);
+          if (existing == null) {
+            await _symptomsRepo.insert({'name': name});
+            debugPrint('SYNC: pulled symptom $name');
+          }
+        } catch (e) {
+          debugPrint('SYNC: symptom pull error: $e');
+        }
+      }
+
+      // ── Process patient_images ──────────────────────
+      for (final json in remotePatientImages) {
+        try {
+          final map = Map<String, dynamic>.from(json as Map);
+          final driveUrl = map['drive_url']?.toString() ?? '';
+          final remoteOpdId = map['opd_visit_id']?.toString() ?? '';
+          final remotePatientSyncId = map['patient_id']?.toString() ?? '';
+          if (driveUrl.isEmpty) continue;
+
+          int localPatientId = 0;
+          if (remotePatientSyncId.isNotEmpty) {
+            final patient = await _patientRepo.getBySyncId(remotePatientSyncId);
+            localPatientId = Helpers.toInt(patient?['id'], _toSqlitePatientId(remotePatientSyncId));
+          }
+
+          int localOpdVisitId = 0;
+          if (remoteOpdId.isNotEmpty) {
+            final opd = await _opdRepo.getByOpdId(remoteOpdId);
+            localOpdVisitId = Helpers.toInt(opd?['id']);
+          }
+
+          final existingImages = await _patientImagesRepo.getByOpdVisitId(localOpdVisitId);
+          final alreadyPresent = existingImages.any(
+            (img) => img['drive_url'] == driveUrl || img['file_path'] == driveUrl,
+          );
+
+          if (!alreadyPresent && localPatientId > 0) {
+            await _patientImagesRepo.insert({
+              'patient_id': localPatientId,
+              'opd_visit_id': localOpdVisitId > 0 ? localOpdVisitId : null,
+              'file_path': driveUrl,
+              'image_type': map['image_type']?.toString() ?? 'opd_attachment',
+              'sync_status': 'synced',
+              'uploaded_at': map['uploaded_at']?.toString() ?? DateTime.now().toIso8601String(),
+              'created_at': map['created_at']?.toString() ?? DateTime.now().toIso8601String(),
+              'drive_url': driveUrl,
+            });
+            debugPrint('SYNC: pulled patient image with Drive URL: $driveUrl');
+          }
+        } catch (e) {
+          debugPrint('SYNC: patient image pull error: $e');
+        }
+      }
+
+      // ── Process deleted entities ──
       final remoteDeleted = data['deleted_entities'] as List<dynamic>? ?? [];
       debugPrint('SYNC processing ${remoteDeleted.length} deleted entities');
       for (final del in remoteDeleted) {
@@ -759,10 +986,10 @@ class SyncManager extends ChangeNotifier {
           if (etype == 'patient') {
             final local = await _patientRepo.getBySyncId(eid);
             if (local != null) {
-              final localId = local['id'] as int;
+              final localId = Helpers.toInt(local['id']);
               final opds = await _opdRepo.getByPatientId(localId);
               for (final opd in opds) {
-                final opdSqlId = opd['id'] as int;
+                final opdSqlId = Helpers.toInt(opd['id']);
                 await _patientImagesRepo.deleteByOpdVisitId(opdSqlId);
               }
               await _opdRepo.deleteByPatientId(localId);
@@ -773,7 +1000,7 @@ class SyncManager extends ChangeNotifier {
           } else if (etype == 'opd_visit') {
             final local = await _opdRepo.getByOpdId(eid);
             if (local != null) {
-              final localId = local['id'] as int;
+              final localId = Helpers.toInt(local['id']);
               await _patientImagesRepo.deleteByOpdVisitId(localId);
               await _opdRepo.delete(localId);
               await _syncQueueRepo.clearByEntity('opd_visit', eid);
@@ -800,18 +1027,25 @@ class SyncManager extends ChangeNotifier {
     } catch (_) {
       // Pull might fail — push already succeeded
     }
-    }
   }
 
   Future<void> forceSyncNow() async {
     print('FORCE SYNC START');
+    if (_syncState == SyncState.syncing) {
+      debugPrint('FORCE SYNC: already syncing, scheduling deferred sync');
+      _pendingSyncRequested = true;
+      return;
+    }
     await _trySync();
     print('FORCE SYNC END');
   }
 
   Future<bool> triggerManualSync() async {
     if (kIsWeb) return false;
-    if (_syncState == SyncState.syncing) return false;
+    if (_syncState == SyncState.syncing) {
+      _pendingSyncRequested = true;
+      return false;
+    }
 
     _syncState = SyncState.syncing;
     notifyListeners();

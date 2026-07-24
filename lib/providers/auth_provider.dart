@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../services/storage_service.dart';
 import '../services/backup_code_service.dart';
+import '../services/firebase_messaging_service.dart';
 
 class AuthProvider extends ChangeNotifier {
   final AuthService _authService = AuthService();
@@ -79,6 +80,7 @@ class AuthProvider extends ChangeNotifier {
 
       _isAuthenticated = true;
       _currentUser = user;
+      FirebaseMessagingService().subscribeToUserTopic(user.id);
       await _storageService.setLoggedIn(_rememberMe);
       if (_rememberMe) {
         await _storageService.setRememberMe(true);
@@ -99,8 +101,10 @@ class AuthProvider extends ChangeNotifier {
     final valid = await BackupCodeService.verifyAndConsumeCode(code);
     if (!valid) return false;
 
-    _needs2FA = false;
     _isAuthenticated = true;
+    if (_currentUser != null) {
+      FirebaseMessagingService().subscribeToUserTopic(_currentUser!.id);
+    }
     if (_rememberMe) {
       await _storageService.setRememberMe(true);
       await _storageService.setUsername(_pendingUsername);
@@ -129,6 +133,7 @@ class AuthProvider extends ChangeNotifier {
     if (user != null) {
       _isAuthenticated = true;
       _currentUser = user;
+      FirebaseMessagingService().subscribeToUserTopic(user.id);
       await _storageService.setLoggedIn(true);
     }
 
@@ -138,6 +143,9 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> signOut() async {
+    if (_currentUser != null) {
+      FirebaseMessagingService().unsubscribeFromUserTopic(_currentUser!.id);
+    }
     _isAuthenticated = false;
     _currentUser = null;
     _username = '';
@@ -161,10 +169,12 @@ class AuthProvider extends ChangeNotifier {
       if (user != null) {
         _isAuthenticated = true;
         _currentUser = user;
+        FirebaseMessagingService().subscribeToUserTopic(user.id);
       } else if (_rememberMe) {
         _username = await _storageService.getUsername();
         _isAuthenticated = true;
         _currentUser = AppUser(id: '1', name: 'Dr. $_username', email: '$_username@medihive.com');
+        FirebaseMessagingService().subscribeToUserTopic(_currentUser!.id);
       }
     }
     _hasLoadedCredentials = true;

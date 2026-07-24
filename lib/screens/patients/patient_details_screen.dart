@@ -53,6 +53,7 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
   List<VisitRecord> _visits = [];
   List<Map<String, dynamic>> _opdRows = [];
   bool _loaded = false;
+  int _loadVersion = 0;
 
   @override
   void initState() {
@@ -60,7 +61,9 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
     _loadData();
   }
 
-  Future<void> _loadData() async {
+  Future<void> _loadData({bool force = false}) async {
+    if (_loaded && !force) return;
+    _loadVersion++;
     final patientRepo = PatientRepository();
     var patientRow = await patientRepo.getBySyncId(widget.patientId);
     patientRow ??= await _getPatientByLocalId(patientRepo);
@@ -70,7 +73,7 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
       return;
     }
 
-    final sqliteId = patientRow['id'] as int;
+    final sqliteId = Helpers.toInt(patientRow['id']);
     final displayId = (patientRow['sync_id'] as String?)?.isNotEmpty == true
         ? patientRow['sync_id'] as String
         : 'P${sqliteId.toString().padLeft(3, '0')}';
@@ -172,7 +175,7 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
     final localRow = await opdRepo.getByOpdId(opdId);
     if (localRow == null) return;
 
-    final localId = localRow['id'] as int;
+    final localId = Helpers.toInt(localRow['id']);
 
     // Clean up images
     final imagesRepo = PatientImagesRepository();
@@ -272,78 +275,95 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
                       padding: const EdgeInsets.fromLTRB(16, 13, 16, 28),
                       child: Column(
                         children: [
-                          Container(
-                            padding: const EdgeInsets.all(20),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.10),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.15),
-                              ),
-                            ),
-                            child: Column(
+                            Stack(
                               children: [
-                                Row(
-                                  children: [
-                                    Hero(
-                                      tag: 'patient_avatar_${patient.id}',
-                                      child: CircleAvatar(
-                                        radius: 40,
-                                        backgroundColor: Colors.white,
-                                        child: Text(
-                                          patient.initial,
-                                          style: TextStyle(
-                                            fontSize: 32,
-                                            fontWeight: FontWeight.bold,
-                                            color: AppTheme.primary,
-                                          ),
-                                        ),
-                                      ),
+                                Container(
+                                  padding: const EdgeInsets.all(20),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.10),
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(
+                                      color: Colors.white.withValues(alpha: 0.15),
                                     ),
-                                    SizedBox(width: 16),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
+                                  ),
+                                  child: Column(
+                                    children: [
+                                      Row(
                                         children: [
-                                          Text(
-                                            patient.name,
-                                            style: TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 22,
-                                              fontWeight: FontWeight.bold,
-                                              letterSpacing: -0.3,
+                                          Hero(
+                                            tag: 'patient_avatar_${patient.id}',
+                                            child: CircleAvatar(
+                                              radius: 40,
+                                              backgroundColor: Colors.white,
+                                              child: Text(
+                                                patient.initial,
+                                                style: TextStyle(
+                                                  fontSize: 32,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: AppTheme.primary,
+                                                ),
+                                              ),
                                             ),
                                           ),
-                                          SizedBox(height: 4),
-                                          Text(
-                                            '${patient.id} • ${patient.gender}',
-                                            style: TextStyle(
-                                              color: Colors.white.withValues(
-                                                alpha: 0.8,
-                                              ),
-                                              fontSize: 13,
+                                          SizedBox(width: 16),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  patient.name,
+                                                  style: TextStyle(
+                                                    color: Colors.white,
+                                                    fontSize: 22,
+                                                    fontWeight: FontWeight.bold,
+                                                    letterSpacing: -0.3,
+                                                  ),
+                                                ),
+                                                SizedBox(height: 4),
+                                                Text(
+                                                  '${patient.id} • ${patient.gender}',
+                                                  style: TextStyle(
+                                                    color: Colors.white.withValues(
+                                                      alpha: 0.8,
+                                                    ),
+                                                    fontSize: 13,
+                                                  ),
+                                                ),
+                                              ],
                                             ),
                                           ),
                                         ],
                                       ),
-                                    ),
-                                  ],
+                                      SizedBox(height: 16),
+                                      Row(
+                                        children: [
+                                          _glassTile('Age', '${patient.age} years'),
+                                          SizedBox(width: 12),
+                                          _glassTile(
+                                            'Blood Group',
+                                            patient.bloodGroup,
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
                                 ),
-                                SizedBox(height: 16),
-                                Row(
-                                  children: [
-                                    _glassTile('Age', '${patient.age} years'),
-                                    SizedBox(width: 12),
-                                    _glassTile(
-                                      'Blood Group',
-                                      patient.bloodGroup,
-                                    ),
-                                  ],
+                                Positioned(
+                                  top: 0,
+                                  right: 0,
+                                  child: IconButton(
+                                    icon: const Icon(Icons.edit_outlined,
+                                        color: Colors.white70, size: 22),
+                                    onPressed: () async {
+                                      await context.push(
+                                          '/app/patients/${widget.patientId}/edit');
+                                      if (mounted) _loadData(force: true);
+                                    },
+                                  ),
                                 ),
                               ],
                             ),
-                          ),
                         ],
                       ),
                     ),
@@ -408,11 +428,26 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
                               ),
                               SizedBox(height: 16),
                               ...visits.asMap().entries.map(
-                                (e) => VisitTimelineItem(
-                                  visit: e.value,
-                                  isLast: e.key == visits.length - 1,
-                                  onDelete: () => _confirmDeleteOpd(e.key),
-                                ),
+                                (e) {
+                                  final opdId = e.key < _opdRows.length
+                                      ? _opdRows[e.key]['opd_id']?.toString() ?? ''
+                                      : '';
+                                  return VisitTimelineItem(
+                                    visit: e.value,
+                                    isLast: e.key == visits.length - 1,
+                                    onDelete: () => _confirmDeleteOpd(e.key),
+                                    onEdit: opdId.isNotEmpty
+                                        ? () async {
+                                            await context.push(
+                                              '/app/opd/edit/${widget.patientId}?opdId=$opdId',
+                                            );
+                                            if (mounted) {
+                                              _loadData(force: true);
+                                            }
+                                          }
+                                        : null,
+                                  );
+                                },
                               ),
                             ],
                           ),
@@ -537,17 +572,20 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
                                               as String? ??
                                           '',
                                       doctorName: settings.doctorName,
+                                      doctorQualification:
+                                          settings.doctorSpecialty,
                                       clinicName: settings.clinicName,
                                       clinicAddress: settings.clinicAddress,
                                       clinicPhone: settings.clinicPhone,
                                       licenseNo: settings.doctorLicense,
                                       patientMobile: patient.mobile,
+                                      clinicLogoPath: settings.clinicLogoPath,
                                     );
 
                                     final pdfData =
                                         await PrescriptionPdfService.generatePdf(
                                           rx,
-                                          includePatientDetails: false,
+                                          includePatientDetails: true,
                                         );
                                     final normalizedPhone =
                                         Helpers.normalizePhone(patient.mobile);
@@ -570,9 +608,13 @@ class _PatientDetailsScreenState extends State<PatientDetailsScreen> {
                                         await getTemporaryDirectory();
                                     final safeName = patient.name
                                         .replaceAll(RegExp(r'[^\w\s-]'), '')
-                                        .replaceAll(RegExp(r'\s+'), '_');
+                                        .replaceAll(RegExp(r'\s+'), '_')
+                                        .trim()
+                                        .replaceAll(RegExp(r'_+'), '_');
+                                    final safeId = patient.id
+                                        .replaceAll(RegExp(r'[^\w]'), '');
                                     final pdfFile = File(
-                                      '${tempDir.path}/${safeName}_${patient.id}.pdf',
+                                      '${tempDir.path}/${safeName}_$safeId.pdf',
                                     );
                                     await pdfFile.writeAsBytes(pdfData);
 

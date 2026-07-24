@@ -21,15 +21,18 @@ import '../../widgets/success_overlay.dart';
 import '../../utils/constants.dart';
 import '../../utils/helpers.dart';
 import '../../utils/medical_data.dart';
+import 'dart:async';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 import '../../repositories/opd_record_repository.dart';
+import '../../repositories/patient_repository.dart';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 
 class OpdRegistrationScreen extends StatefulWidget {
   final String? editPatientId;
-  const OpdRegistrationScreen({super.key, this.editPatientId});
+  final String? editOpdId;
+  const OpdRegistrationScreen({super.key, this.editPatientId, this.editOpdId});
 
   @override
   State<OpdRegistrationScreen> createState() => _OpdRegistrationScreenState();
@@ -54,6 +57,7 @@ class _OpdRegistrationScreenState extends State<OpdRegistrationScreen> {
   bool _shakeAddress = false;
   bool _isSubmitting = false;
   bool _hasTriedSubmit = false;
+  Timer? _lookupDebounce;
 
   @override
   void initState() {
@@ -69,7 +73,7 @@ class _OpdRegistrationScreenState extends State<OpdRegistrationScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final p = context.read<OpdProvider>();
       if (widget.editPatientId != null && widget.editPatientId!.isNotEmpty) {
-        p.loadPatientForEdit(widget.editPatientId!);
+        p.loadPatientForEdit(widget.editPatientId!, opdId: widget.editOpdId);
       } else {
         p.loadDraftFromHive();
       }
@@ -87,6 +91,7 @@ class _OpdRegistrationScreenState extends State<OpdRegistrationScreen> {
 
   @override
   void dispose() {
+    _lookupDebounce?.cancel();
     _scrollController.dispose();
     super.dispose();
   }
@@ -116,6 +121,155 @@ class _OpdRegistrationScreenState extends State<OpdRegistrationScreen> {
       months = 11;
     }
     return "Age: $years years $months months";
+  }
+
+  void _onMobileChanged(OpdProvider opd, String value) {
+    final normalized = Helpers.normalizePhone(value);
+    final fieldValue = normalized.isNotEmpty ? normalized : value;
+    opd.updateField('mobile', fieldValue);
+    _lookupDebounce?.cancel();
+    if (normalized.length == 10) {
+      _lookupDebounce = Timer(const Duration(milliseconds: 500), () {
+        if (!mounted) return;
+        opd.searchPatientsByMobile(normalized);
+      });
+    } else {
+      opd.clearMobileLookup();
+    }
+  }
+
+  Widget _buildMobileLookup(OpdProvider opd) {
+    final patients = opd.matchedPatients;
+    final isSingle = patients.length == 1;
+
+    return Container(
+      margin: const EdgeInsets.only(top: 4),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.primary.withAlpha(76)),
+        boxShadow: AppTheme.cardShadow,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (patients.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Text(
+                isSingle ? '' : 'Available Patients',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.textSecondary,
+                ),
+              ),
+            ),
+            ...patients.asMap().entries.map((entry) {
+              final patient = entry.value;
+              final name = patient['full_name']?.toString() ?? '';
+              final gender = patient['gender']?.toString() ?? '';
+              final ageStr = _formatLookupAge(patient);
+              final dobStr = _formatLookupDob(patient);
+              return InkWell(
+                onTap: () => opd.autoFillFromPatient(patient),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 18,
+                        backgroundColor: AppTheme.primary.withAlpha(30),
+                        child: Text(
+                          name.isNotEmpty ? name[0].toUpperCase() : '?',
+                          style: TextStyle(
+                            color: AppTheme.primary,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              name,
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                                color: AppTheme.textPrimary,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '$gender${ageStr.isNotEmpty ? ' | $ageStr' : ''}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: AppTheme.textSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (dobStr.isNotEmpty)
+                        Text(
+                          dobStr,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: AppTheme.textSecondary,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+            const Divider(height: 1, thickness: 1),
+          ],
+          InkWell(
+            onTap: () => opd.selectNewPatientRegistration(),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                children: [
+                  Icon(Icons.person_add_outlined, size: 18, color: AppTheme.primary),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Register New Patient',
+                    style: TextStyle(
+                      color: AppTheme.primary,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatLookupAge(Map<String, dynamic> patient) {
+    final age = patient['age'];
+    if (age == null) return '';
+    final ageStr = age.toString();
+    if (ageStr.contains('yr') || ageStr.contains('mo')) return ageStr;
+    final ageNum = int.tryParse(ageStr);
+    if (ageNum != null) return '$ageNum yrs';
+    return ageStr;
+  }
+
+  String _formatLookupDob(Map<String, dynamic> patient) {
+    final dob = patient['dob']?.toString() ?? '';
+    if (dob.isEmpty) return '';
+    final date = DateTime.tryParse(dob);
+    if (date != null) {
+      return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
+    }
+    return dob;
   }
 
   bool _validateStep1(OpdProvider opd) {
@@ -362,22 +516,49 @@ class _OpdRegistrationScreenState extends State<OpdRegistrationScreen> {
                                   opd.formData.name;
                               // Find existing record ID if editing
                               String? existingId;
-                              if (widget.editPatientId != null) {
-                                final sqliteId = int.tryParse(
-                                  widget.editPatientId!.replaceAll(
-                                    RegExp(r'[^0-9]'), '',
-                                  ),
-                                ) ?? 0;
-                                if (sqliteId != 0) {
+                              print('OPD SAVE: editPatientId="${widget.editPatientId}" editOpdId="${widget.editOpdId}"');
+                              if (widget.editOpdId != null &&
+                                  widget.editOpdId!.isNotEmpty) {
+                                existingId = widget.editOpdId;
+                                print('OPD SAVE: using direct editOpdId=$existingId');
+                              } else if (widget.editPatientId != null &&
+                                  widget.editPatientId!.isNotEmpty) {
+                                final patientSyncId = widget.editPatientId!;
+                                final patientRepo = PatientRepository();
+                                final patient =
+                                    await patientRepo.getBySyncId(patientSyncId);
+                                if (patient != null) {
+                                  final sqlitePatientId = Helpers.toInt(patient['id']);
                                   final opdRepo = OpdRecordRepository();
                                   final records = await opdRepo
-                                      .getByPatientId(sqliteId);
+                                      .getByPatientId(sqlitePatientId);
+                                  print('OPD SAVE: patientRecords=${records.length}');
                                   if (records.isNotEmpty) {
-                                    existingId = records.first['opd_id']
-                                        ?.toString();
+                                    final firstOpdId =
+                                        records.first['opd_id']?.toString();
+                                    print(
+                                        'OPD SAVE: firstRecord opd_id=$firstOpdId');
+                                    if (firstOpdId != null &&
+                                        firstOpdId.isNotEmpty) {
+                                      existingId = firstOpdId;
+                                    } else {
+                                      print(
+                                          'OPD SAVE WARNING: first record has null/empty opd_id');
+                                    }
+                                  } else {
+                                    print(
+                                        'OPD SAVE WARNING: no OPD records found for patient sqlitePatientId=$sqlitePatientId');
                                   }
+                                } else {
+                                  print(
+                                      'OPD SAVE WARNING: patient not found by syncId=$patientSyncId');
                                 }
+                              } else {
+                                print(
+                                    'OPD SAVE: editPatientId is null/empty — will CREATE new OPD');
                               }
+                              print('OPD SAVE: existingId=$existingId');
+                              if (!context.mounted) return;
                               final success = await opd.submitRecord(
                                 dashboardProvider: context
                                     .read<DashboardProvider>(),
@@ -398,15 +579,26 @@ class _OpdRegistrationScreenState extends State<OpdRegistrationScreen> {
                                 }
                                 return;
                               }
-                              context.read<NotificationProvider>().addNotification(
-                                'OPD Record Saved',
-                                'Patient $patientNameForNotification record saved',
-                              );
+                              if (context.mounted) {
+                                context.read<NotificationProvider>().addNotification(
+                                  'OPD Record Saved',
+                                  'Patient $patientNameForNotification record saved',
+                                );
+                              }
                             } catch (e) {
                               setState(() => _isSubmitting = false);
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Failed to save OPD record: $e'),
+                                    backgroundColor: Colors.red,
+                                  ),
+                                );
+                              }
                               rethrow;
                             }
 
+                            if (!context.mounted) return;
                             showGeneralDialog(
                               context: context,
                               barrierColor: Colors.black.withValues(
@@ -509,6 +701,30 @@ class _OpdRegistrationScreenState extends State<OpdRegistrationScreen> {
               ),
             ],
           ),
+          const SizedBox(height: 16),
+          ShakeWidget(
+            shake: _shakeMobile,
+            child: _textField(
+              'Mobile Number',
+              'Enter mobile number',
+              opd.formData.mobile,
+              (v) => _onMobileChanged(opd, v),
+              keyboardType: TextInputType.phone,
+              isRequired: true,
+              prefixIcon: Icons.phone_outlined,
+              validator: (value) {
+                if (value == null || value.trim().isEmpty) {
+                  return 'Mobile number is required';
+                }
+                final numStr = value.trim().replaceAll(RegExp(r'[^0-9]'), '');
+                if (numStr.length != 10) {
+                  return 'Enter exactly 10 digits';
+                }
+                return null;
+              },
+            ),
+          ),
+          if (opd.showMobileLookup) _buildMobileLookup(opd),
           const SizedBox(height: 16),
           ShakeWidget(
             shake: _shakeName,
@@ -706,32 +922,6 @@ class _OpdRegistrationScreenState extends State<OpdRegistrationScreen> {
             options: AppConstants.genders,
             selected: opd.formData.gender,
             onSelected: (v) => opd.updateField('gender', v),
-          ),
-          const SizedBox(height: 16),
-          ShakeWidget(
-            shake: _shakeMobile,
-            child: _textField(
-              'Mobile Number',
-              'Enter mobile number',
-              opd.formData.mobile,
-              (v) {
-                final normalized = Helpers.normalizePhone(v);
-                opd.updateField('mobile', normalized.isNotEmpty ? normalized : v);
-              },
-              keyboardType: TextInputType.phone,
-              isRequired: true,
-              prefixIcon: Icons.phone_outlined,
-              validator: (value) {
-                if (value == null || value.trim().isEmpty) {
-                  return 'Mobile number is required';
-                }
-                final numStr = value.trim().replaceAll(RegExp(r'[^0-9]'), '');
-                if (numStr.length != 10) {
-                  return 'Enter exactly 10 digits';
-                }
-                return null;
-              },
-            ),
           ),
           const SizedBox(height: 16),
           ShakeWidget(
@@ -1434,8 +1624,9 @@ class _OpdRegistrationScreenState extends State<OpdRegistrationScreen> {
             isRequired: true,
             validator: (value) {
               if (value == null || value.trim().isEmpty) return 'Required';
-              if (double.tryParse(value.trim()) == null)
+              if (double.tryParse(value.trim()) == null) {
                 return 'Must be a valid number';
+              }
               return null;
             },
           ),

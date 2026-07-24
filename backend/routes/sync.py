@@ -1,313 +1,424 @@
+"""Mobile-only sync endpoints for MediHive.
+
+Consolidated sync module with incremental upload/download and disaster recovery.
+Supports legacy and consolidated endpoint names for backward compatibility.
+"""
+
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from models.patient import Patient
+from models.patient import Patient, parse_patient_id
 from models.opd_record import OPDRecord
-from models.appointment import Appointment
-from models.deleted_entity import DeletedEntity
+from models.calendar_note import CalendarNote
+from models.clinic_setting import ClinicSetting
+from models.medicine import Medicine
+from models.symptom_master import SymptomMaster
+from models.patient_image import PatientImage
 from database import get_db
 from datetime import datetime
-from pathlib import Path
 from config import IMAGE_STORAGE_PATH, IS_CLOUD
-from desktop_google.drive_service import upload_images_to_drive, check_existing_drive_files, upload_image_fileobj_to_drive
-from config import GOOGLE_SHEET_ID
-from desktop_google.sheets_service import (
-    upsert_opd_row_in_sheet,
-    update_opd_row_in_sheet,
-    clear_opd_sheet_data,
-)
 from services.log_service import get_logger
 from routes.opd import save_images_locally, build_sheet_row_data, _ImageRecord
 
 logger = get_logger(__name__)
 
 sync_bp = Blueprint('sync', __name__)
+cloud_bp = Blueprint('cloud', __name__)
 
 
 def _sync_opd_to_sheets(opd, image_links=None):
-    """
-    Append/upsert (Stage 1) or update (Stage 2) OPD row in Google Sheets.
-    Raises RuntimeError if the sheet is not accessible — no new sheet is created.
-    """
-    patient = Patient.get(opd.get('patient_id'))
+    if opd is None:
+        logger.warning("_sync_opd_to_sheets: opd is None, skipping")
+        return None
+    opd_id = opd.get('id', 'UNKNOWN')
+    patient_id = opd.get('patient_id', 'UNKNOWN')
+    logger.info(
+        "SHEET SYNC START: OPD=%s patient_id=%s has_images=%s",
+        opd_id, patient_id, bool(image_links),
+    )
+
+    if image_links is None:
+        try:
+            existing_images = PatientImage.all(
+                patient_id=patient_id, opd_visit_id=opd_id
+            )
+            image_links = [img['drive_url'] for img in existing_images if img.get('drive_url')]
+            if image_links:
+                logger.info(
+                    "Restored %d existing image link(s) from patient_images for OPD %s",
+                    len(image_links), opd_id,
+                )
+        except Exception as e:
+            logger.warning(
+                "Could not query patient_images for OPD %s: %s", opd_id, e,
+            )
+
+    patient = Patient.get(patient_id)
     if not patient:
         logger.warning(
-            "Patient %s not found, creating placeholder for sheet sync for OPD %s",
-            opd.get('patient_id'), opd['id'],
+            "Patient %s not found in PostgreSQL, creating placeholder for sheet sync for OPD %s",
+            patient_id, opd_id,
         )
-        now = datetime.utcnow().isoformat()
-        db = get_db()
-        db.execute("""
-            INSERT INTO patients
-                (id, name, mobile, gender, created_at, updated_at, is_synced)
-            VALUES (%s, %s, %s, %s, %s, %s, 0)
-            ON CONFLICT DO NOTHING
-        """, (
-            opd.get('patient_id'), 'Unknown (Auto-created)',
-            '', 'Not Specified', now, now,
-        ))
-        db.commit()
-        db.close()
-        patient = Patient.get(opd.get('patient_id'))
-        if not patient:
-            logger.error("Could not create placeholder patient %s", opd.get('patient_id'))
-            return
+        parsed_pid = parse_patient_id(patient_id)
+        if parsed_pid is None:
+            logger.error(
+                "Cannot create placeholder patient: '%s' is not a valid patient ID for OPD %s",
+                patient_id, opd_id,
+            )
+            patient = {
+                'id': patient_id,
+                'full_name': 'Unknown',
+                'mobile_number': '',
+                'gender': 'Not Specified',
+                'dob': '',
+                'age': 0,
+                'blood_group': '',
+                'address': '',
+            }
+        else:
+            now = datetime.utcnow().isoformat()
+            db = get_db()
+            try:
+                db.execute("""
+                    INSERT INTO patients
+                        (id, full_name, mobile_number, gender, created_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO NOTHING
+                """, (
+                    str(parsed_pid), 'Unknown (Auto-created)',
+                    '', 'Not Specified', now,
+                ))
+                db.commit()
+            except Exception as e:
+                logger.warning("Placeholder patient insert failed for %s: %s", patient_id, e)
+                db.rollback()
+            finally:
+                db.close()
+            patient = Patient.get(patient_id)
+            if not patient:
+                logger.error(
+                    "Could not create placeholder patient %s for OPD %s",
+                    patient_id, opd_id,
+                )
+                patient = {
+                    'id': patient_id,
+                    'full_name': 'Unknown',
+                    'mobile_number': '',
+                    'gender': 'Not Specified',
+                    'dob': '',
+                    'age': 0,
+                    'blood_group': '',
+                    'address': '',
+                }
+
     row_data = build_sheet_row_data(opd, patient, image_links or [])
-    if image_links:
-        update_opd_row_in_sheet(opd['id'], row_data)
-    else:
-        upsert_opd_row_in_sheet(opd['id'], row_data)
+    try:
+        from sheets_utils import upsert_opd_row_in_sheet
+        upsert_opd_row_in_sheet(opd_id, row_data)
+        logger.info("SHEET SYNC END: OPD=%s", opd_id)
+        return None
+    except RuntimeError as e:
+        logger.warning("Sheet sync skipped for OPD %s: %s", opd_id, e)
+        return f"Sheet sync skipped: {e}"
+    except Exception as e:
+        logger.warning("Sheet sync error for OPD %s: %s", opd_id, e)
+        return f"Sheet sync error: {e}"
 
 
-@sync_bp.route('/pull', methods=['POST'])
-@jwt_required()
-def pull():
-    """
-    Client sends its last_sync timestamp.
-    Server returns all records updated after that timestamp for this user.
-    """
-    user_id = get_jwt_identity()
-    data = request.get_json() or {}
-    last_sync = data.get('last_sync', '2000-01-01T00:00:00')
+# ── Device Registration (Dummy for compatibility) ──
 
-    patients = Patient.updated_since(last_sync, user_id=user_id)
-    opd_records = OPDRecord.updated_since(last_sync, user_id=user_id)
-    appointments = Appointment.updated_since(last_sync, user_id=user_id)
-    deleted_entities = DeletedEntity.since(last_sync, user_id=user_id)
-
-    db = get_db()
-    now = datetime.utcnow().isoformat()
-    existing = db.execute(
-        "SELECT id FROM last_sync WHERE user_id = %s", (user_id,)
-    ).fetchone()
-    if existing:
-        db.execute(
-            "UPDATE last_sync SET last_sync = %s, updated_at = %s WHERE user_id = %s",
-            (last_sync, now, user_id)
-        )
-    else:
-        db.execute(
-            "INSERT INTO last_sync (user_id, last_sync, created_at, updated_at) VALUES (%s, %s, %s, %s)",
-            (user_id, last_sync, now, now)
-        )
-    db.commit()
-    db.close()
-
-    return jsonify({
-        'patients': patients,
-        'opd_records': opd_records,
-        'appointments': appointments,
-        'deleted_entities': deleted_entities,
-        'server_time': datetime.utcnow().isoformat(),
-    }), 200
+@sync_bp.route('/register-device', methods=['POST'])
+@cloud_bp.route('/register-device', methods=['POST'])
+def register_device():
+    logger.info("Device registration request received (dummy endpoint)")
+    return jsonify({'message': 'Device registered'}), 200
 
 
+@sync_bp.route('/heartbeat', methods=['POST'])
+@cloud_bp.route('/heartbeat', methods=['POST'])
+def heartbeat():
+    return jsonify({'message': 'ok'}), 200
+
+
+# ── Incremental Sync Upload ──────────────────────────
+
+@sync_bp.route('/upload', methods=['POST'])
 @sync_bp.route('/push', methods=['POST'])
+@cloud_bp.route('/upload-changes', methods=['POST'])
 @jwt_required()
-def push():
-    """
-    Stage 1: Client sends local changes. Server upserts them,
-    then immediately syncs each OPD to Google Sheets (no images yet).
-    """
+def sync_upload():
     user_id = get_jwt_identity()
     data = request.get_json() or {}
+    device_id = data.get('device_id', '')
+    now = datetime.utcnow().isoformat()
+
     logger.info(
-        "PUSH request from user=%s ip=%s patients=%d opd_records=%d appointments=%d",
-        user_id, request.remote_addr,
+        "UPLOAD user=%s device=%s patients=%d opd_records=%d calendar_notes=%d deleted=%d",
+        user_id, device_id,
         len(data.get('patients', [])),
         len(data.get('opd_records', [])),
-        len(data.get('appointments', [])),
+        len(data.get('calendar_notes', [])),
+        len(data.get('deleted_entities', [])),
     )
-    if data.get('opd_records'):
-        for r in data['opd_records']:
-            logger.info("PUSH OPD: id=%s patient_id=%s visit_date=%s",
-                        r.get('id'), r.get('patient_id'), r.get('visit_date'))
 
-    results = {'patients': [], 'opd_records': [], 'appointments': []}
+    results = {'patients': [], 'opd_records': []}
+    sheet_warnings = []
     temp_id_map = {}
 
+    # ── Patients ──
     for p in data.get('patients', []):
-        p['user_id'] = user_id
         old_id = p.get('id', '')
-        is_temp = old_id.startswith('TEMP_')
+        is_temp = str(old_id).startswith('TEMP_')
         if is_temp:
             p['id'] = Patient.assign_next_id()
             temp_id_map[old_id] = p['id']
-        patient = Patient.upsert(p)
+
+        try:
+            patient = Patient.upsert(p)
+        except Exception as e:
+            logger.error("Patient upsert FAILED for id=%s: %s", old_id, e)
+            sheet_warnings.append(f"Patient upsert failed for {old_id}: {e}")
+            continue
+
+        if patient is None:
+            logger.error("Patient upsert returned None for id=%s", old_id)
+            sheet_warnings.append(f"Patient upsert returned None for {old_id}")
+            continue
+
         results['patients'].append(patient)
 
-    # Re-sync all existing OPD records for this patient so that
-    # patient columns (name, mobile, blood group, address, etc.)
-    # are updated in Google Sheets immediately.
-    re_synced_opds = 0
-    for p in data.get('patients', []):
-        pat_id = p.get('id', '')
-        if pat_id and not pat_id.startswith('TEMP_'):
-            for opd in OPDRecord.all(patient_id=pat_id):
-                try:
-                    _sync_opd_to_sheets(opd)
-                    re_synced_opds += 1
-                except Exception as e:
-                    logger.warning(
-                        "Patient-edit re-sync failed for OPD %s: %s",
-                        opd['id'], e,
-                    )
-    if re_synced_opds:
-        logger.info(
-            "Re-synced %d OPD records to sheets after patient edits",
-            re_synced_opds,
-        )
+        # Sync all OPD records of this patient to Google Sheet to update patient details there immediately!
+        try:
+            opds = OPDRecord.all(patient_id=patient['id'])
+            for opd in opds:
+                sheet_err = _sync_opd_to_sheets(opd)
+                if sheet_err:
+                    sheet_warnings.append(f"Patient {patient['id']} OPD {opd.get('id')}: {sheet_err}")
+        except Exception as e:
+            logger.warning("Failed to sync patient %s OPDs to sheets: %s", patient['id'], e)
+            sheet_warnings.append(f"Patient {patient.get('id', old_id)} OPD batch sync failed: {e}")
 
-    sheet_errors = []
+    # ── OPD Records ──
     for r in data.get('opd_records', []):
-        r['user_id'] = user_id
         pat_id = r.get('patient_id', '')
         if pat_id in temp_id_map:
             r['patient_id'] = temp_id_map[pat_id]
-        pk = r.get('panchakarma_notes', '')
-        panchakarma_fee = r.get('panchakarma_fee', '')
-        total_fee = r.get('total_fee', '')
-        discount_type = r.get('discount_type', '')
-        logger.info("PUSH DEBUG: OPD id=%s panchakarma_notes=%r panchakarma_fee=%s total_fee=%s discount_type=%s",
-                     r.get('id'), pk, panchakarma_fee, total_fee, discount_type)
-        result = OPDRecord.upsert(r)
-        results['opd_records'].append(result)
-        try:
-            _sync_opd_to_sheets(r)
-        except RuntimeError as e:
-            msg = f"Sheet not updated for OPD {r.get('id')}: {e}"
-            logger.error(msg)
-            sheet_errors.append(msg)
-        except Exception as e:
-            msg = f"Sheet sync failed for OPD {r.get('id')}: {e}"
-            logger.error(msg)
-            sheet_errors.append(msg)
 
-    deleted_patients_confirmed = []
-    deleted_opd_confirmed = []
-    deleted_appts_confirmed = []
+        try:
+            result = OPDRecord.upsert(r)
+        except Exception as e:
+            logger.error("OPD upsert FAILED for id=%s: %s", r.get('id'), e)
+            sheet_warnings.append(f"OPD upsert failed for {r.get('id')}: {e}")
+            continue
+
+        if result is None:
+            logger.error("OPD upsert returned None for id=%s", r.get('id'))
+            sheet_warnings.append(f"OPD upsert returned None for {r.get('id')}")
+            continue
+
+        results['opd_records'].append(result)
+
+        try:
+            sheet_err = _sync_opd_to_sheets(result)
+            if sheet_err:
+                sheet_warnings.append(f"OPD {result.get('id')}: {sheet_err}")
+        except Exception as e:
+            logger.warning("Sheet sync failed for OPD %s: %s", r.get('id'), e)
+            sheet_warnings.append(f"OPD {r.get('id')}: sheet sync exception: {e}")
+
+    # ── Calendar Notes ──
+    for note in data.get('calendar_notes', []):
+        try:
+            CalendarNote.upsert(note)
+            logger.info("PUSH: calendar note for date %s synced", note.get('note_date'))
+        except Exception as e:
+            logger.warning("PUSH: calendar note sync failed: %s", e)
+
+    # ── Clinic Settings ──
+    for setting in data.get('clinic_settings', []):
+        try:
+            ClinicSetting.upsert(setting)
+            logger.info("PUSH: clinic settings synced")
+        except Exception as e:
+            logger.warning("PUSH: clinic settings sync failed: %s", e)
+
+    # ── Medicines ──
+    for med in data.get('medicines', []):
+        try:
+            Medicine.upsert(med)
+        except Exception as e:
+            logger.warning("PUSH: medicine sync failed: %s", e)
+
+    # ── Symptoms ──
+    for sym in data.get('symptoms', []):
+        try:
+            SymptomMaster.upsert(sym)
+        except Exception as e:
+            logger.warning("PUSH: symptom sync failed: %s", e)
+
+    # ── Deleted Entities ──
     for entry in data.get('deleted_entities', []):
         etype = entry.get('entity_type')
         eid = entry.get('entity_id')
         try:
             if etype == 'patient':
                 Patient.delete(eid)
-                deleted_patients_confirmed.append(eid)
             elif etype == 'opd_visit':
                 OPDRecord.delete(eid)
-                deleted_opd_confirmed.append(eid)
-            elif etype == 'appointment':
-                Appointment.delete(eid)
-                deleted_appts_confirmed.append(eid)
         except Exception as exc:
             logger.warning("Delete sync failed for %s %s: %s", etype, eid, exc)
 
-    for a in data.get('appointments', []):
-        a['user_id'] = user_id
-        results['appointments'].append(Appointment.upsert(a))
-
     response = {
         'results': results,
-        'server_time': datetime.utcnow().isoformat(),
+        'server_time': now,
     }
     if temp_id_map:
         response['temp_ids_mapped'] = temp_id_map
-    if deleted_patients_confirmed or deleted_opd_confirmed or deleted_appts_confirmed:
-        response['deleted_confirmed'] = {
-            'patients': deleted_patients_confirmed,
-            'opd_records': deleted_opd_confirmed,
-            'appointments': deleted_appts_confirmed,
-        }
-    if sheet_errors:
-        response['sheet_warnings'] = sheet_errors
-        response['message'] = 'Data saved locally, but Google Sheet was not updated. Grant the service account Editor access to the sheet, then re-sync.'
-        return jsonify(response), 207  # Multi-Status: partial success
+    if sheet_warnings:
+        response['sheet_warnings'] = sheet_warnings
+
+    try:
+        from services.fcm_service import notify_data_sync
+        notify_data_sync(user_id)
+    except Exception as exc:
+        logger.warning("FCM sync notification failed: %s", exc)
 
     return jsonify(response), 200
 
 
-@sync_bp.route('/push/images/<opd_id>', methods=['POST'])
-@jwt_required()
-def push_images(opd_id):
-    """
-    Stage 2: Upload images to Google Drive, persist links in SQLite,
-    then update the existing Google Sheets row with image links.
-    """
-    logger.info("=== IMAGE UPLOAD START === OPD=%s", opd_id)
-    logger.info("Request content_type=%s content_length=%s",
-                request.content_type, request.content_length)
+# ── Incremental Sync Download ────────────────────────
 
-    opd = OPDRecord.get(opd_id)
+@sync_bp.route('/download', methods=['POST'])
+@sync_bp.route('/pull', methods=['POST'])
+@cloud_bp.route('/download-changes', methods=['POST'])
+@jwt_required()
+def sync_download():
+    user_id = get_jwt_identity()
+    data = request.get_json() or {}
+    last_sync = data.get('last_sync', '2000-01-01T00:00:00')
+
+    patients = Patient.updated_since(last_sync)
+    opd_records = OPDRecord.updated_since(last_sync)
+    calendar_notes = CalendarNote.updated_since(last_sync)
+    clinic_settings = ClinicSetting.updated_since(last_sync)
+    medicines = Medicine.all()
+    symptoms = SymptomMaster.all()
+    patient_images = PatientImage.updated_since(last_sync)
+
+    logger.info(
+        "DOWNLOAD user=%s since=%s patients=%d opd=%d notes=%d images=%d",
+        user_id, last_sync,
+        len(patients), len(opd_records),
+        len(calendar_notes), len(patient_images),
+    )
+
+    return jsonify({
+        'patients': patients,
+        'opd_records': opd_records,
+        'calendar_notes': calendar_notes,
+        'clinic_settings': clinic_settings,
+        'medicines': medicines,
+        'symptoms': symptoms,
+        'patient_images': patient_images,
+        'server_time': datetime.utcnow().isoformat(),
+    }), 200
+
+
+# ── Disaster Recovery: Full Restore ──────────────────
+
+@sync_bp.route('/full-restore', methods=['GET'])
+@jwt_required()
+def full_restore():
+    user_id = get_jwt_identity()
+
+    patients = Patient.all()
+    opd_records = OPDRecord.all()
+    calendar_notes = CalendarNote.all()
+    clinic_settings = ClinicSetting.get_first()
+    medicines = Medicine.all()
+    symptoms = SymptomMaster.all()
+    patient_images = PatientImage.all()
+
+    return jsonify({
+        'patients': patients,
+        'opd_records': opd_records,
+        'calendar_notes': calendar_notes,
+        'clinic_settings': [clinic_settings] if clinic_settings else [],
+        'medicines': medicines,
+        'symptoms': symptoms,
+        'patient_images': patient_images,
+        'server_time': datetime.utcnow().isoformat(),
+    }), 200
+
+
+# ── Mobile Sync: Upload Images ──────────────────────
+
+@sync_bp.route('/upload-images/<opd_id>', methods=['POST'])
+@sync_bp.route('/push/images/<opd_id>', methods=['POST'])
+@cloud_bp.route('/upload-images/<opd_id>', methods=['POST'])
+@jwt_required()
+def sync_upload_images(opd_id):
+    user_id = get_jwt_identity()
+    logger.info("=== IMAGE UPLOAD START === OPD=%s user=%s", opd_id, user_id)
+
+    opd = OPDRecord.get_by_opd_id(opd_id)
+    if opd is None:
+        try:
+            opd = OPDRecord.get(int(opd_id))
+        except (ValueError, TypeError):
+            opd = None
+
     if opd is None:
         logger.warning("OPD record not found: %s", opd_id)
         return jsonify({'error': 'OPD record not found'}), 404
-
-    logger.info("OPD found: patient_id=%s visit_date=%s",
-                opd.get('patient_id'), opd.get('visit_date'))
 
     if 'images' not in request.files:
         logger.warning("No 'images' field in request for OPD %s", opd_id)
         return jsonify({'error': 'No image files provided'}), 400
 
     files = request.files.getlist('images')
-    raw_file_count = len(files)
     files = [f for f in files if f.filename]
-    logger.info("Files received: %d total, %d with filename, %d filtered out",
-                raw_file_count, len(files), raw_file_count - len(files))
-
-    for i, f in enumerate(files):
-        f.seek(0, 2)  # seek to end
-        size = f.tell()
-        f.seek(0)  # seek back to start
-        logger.info("  File[%d]: name=%s type=%s size=%d bytes",
-                    i, f.filename, f.content_type, size)
 
     if not files:
         logger.warning("No valid image files for OPD %s", opd_id)
         return jsonify({'error': 'No valid image files provided'}), 400
 
     try:
-        visit_date = datetime.fromisoformat(opd['visit_date'])
-        logger.info("Parsed visit_date: %s", visit_date)
+        visit_date = datetime.fromisoformat(opd['visit_datetime'])
     except (ValueError, TypeError):
         visit_date = datetime.utcnow()
-        logger.warning("Could not parse visit_date '%s', using current time: %s",
-                       opd.get('visit_date'), visit_date)
 
-    if IS_CLOUD:
-        logger.info("CLOUD MODE: uploading %d image(s) directly to Drive for OPD %s",
-                    len(files), opd_id)
-        drive_urls = []
-        for i, f in enumerate(files, 1):
-            logger.info("Drive upload starting: OPD=%s index=%d filename=%s",
-                        opd_id, i, f.filename)
-            url = upload_image_fileobj_to_drive(opd_id, f, i)
-            if url:
-                drive_urls.append(url)
-                logger.info("Drive upload SUCCESS: OPD=%s url=%s", opd_id, url)
-            else:
-                logger.error("Drive upload FAILED: OPD=%s index=%d", opd_id, i)
-        logger.info("Uploaded %d/%d image(s) to Drive for OPD %s",
-                    len(drive_urls), len(files), opd_id)
-    else:
-        logger.info("LOCAL MODE: saving %d image(s) to disk for OPD %s",
-                    len(files), opd_id)
-        saved_paths = save_images_locally(opd_id, files)
-        logger.info("Saved %d/%d image(s) to disk for OPD %s. Paths: %s",
-                    len(saved_paths), len(files), opd_id,
-                    [str(p) for p in saved_paths])
+    from drive_utils import upload_image_fileobj_to_drive, upload_images_to_drive, check_existing_drive_files
 
-        logger.info("Checking for existing Drive files for OPD %s", opd_id)
-        drive_urls = check_existing_drive_files(opd_id, visit_date, len(saved_paths))
-        if not drive_urls:
-            logger.info("No existing Drive files found, uploading %d image(s) for OPD %s",
-                        len(saved_paths), opd_id)
-            image_records = [_ImageRecord(p) for p in saved_paths]
-            drive_urls = upload_images_to_drive(opd_id, image_records, visit_date)
-            logger.info("Uploaded %d/%d image(s) to Drive for OPD %s. URLs: %s",
-                        len(drive_urls), len(saved_paths), opd_id, drive_urls)
+    drive_urls = []
+    try:
+        if IS_CLOUD:
+            logger.info("CLOUD MODE: uploading %d image(s) directly to Drive for OPD %s",
+                        len(files), opd_id)
+            for i, f in enumerate(files, 1):
+                url = upload_image_fileobj_to_drive(opd_id, f, i)
+                if url:
+                    drive_urls.append(url)
         else:
-            logger.info("Reused %d existing Drive file(s) for OPD %s: %s",
-                        len(drive_urls), opd_id, drive_urls)
+            logger.info("LOCAL MODE: saving %d image(s) to disk for OPD %s", len(files), opd_id)
+            saved_paths = save_images_locally(opd_id, files)
+
+            drive_urls = check_existing_drive_files(opd_id, visit_date, len(saved_paths))
+            if not drive_urls:
+                image_records = [_ImageRecord(p) for p in saved_paths]
+                drive_urls = upload_images_to_drive(opd_id, image_records, visit_date)
+    except Exception as e:
+        logger.error(
+            "DRIVE UPLOAD FAILED for OPD %s: %s",
+            opd_id, e,
+            exc_info=True,
+        )
+        return jsonify({
+            'error': f'Image upload to Drive failed: {e}',
+            'opd_id': opd_id,
+            'image_count': 0,
+            'drive_urls': [],
+            'images_uploaded': False,
+        }), 500
 
     if not drive_urls:
         logger.error("IMAGE UPLOAD FAILED: No Drive URLs generated for OPD %s", opd_id)
@@ -319,25 +430,26 @@ def push_images(opd_id):
             'images_uploaded': False,
         }), 500
 
-    urls_text = "\n".join(drive_urls)
-    OPDRecord.set_image_links(opd_id, urls_text)
-    logger.info("Image links persisted in DB for OPD %s: %s", opd_id, urls_text)
+    try:
+        PatientImage.save_drive_urls(opd['id'], opd.get('patient_id'), drive_urls)
+        logger.info("Saved %d drive URLs to patient_images DB for OPD %s", len(drive_urls), opd_id)
+    except Exception as exc:
+        logger.warning("Could not save drive URLs to patient_images DB: %s", exc)
 
     sheet_update_ok = True
+    sheet_error = None
     try:
-        logger.info("Updating Google Sheet row for OPD %s with %d image link(s)",
-                    opd_id, len(drive_urls))
-        _sync_opd_to_sheets(opd, drive_urls)
-        logger.info("Google Sheet update SUCCESS for OPD %s", opd_id)
-    except RuntimeError as e:
-        logger.error(
-            "Sheet update blocked for OPD %s (no new sheet created): %s",
-            opd_id, e
-        )
-        sheet_update_ok = False
+        updated_opd = OPDRecord.get_by_opd_id(opd_id) or OPDRecord.get(opd['id'])
+        sheet_error = _sync_opd_to_sheets(updated_opd, drive_urls)
+        if sheet_error:
+            logger.error("Sheet update FAILED for OPD %s: %s", opd_id, sheet_error)
+            sheet_update_ok = False
+        else:
+            logger.info("Google Sheet update SUCCESS for OPD %s", opd_id)
     except Exception as e:
         logger.error("Sheet update FAILED for OPD %s: %s", opd_id, e)
         sheet_update_ok = False
+        sheet_error = str(e)
 
     response = {
         'opd_id': opd_id,
@@ -347,84 +459,46 @@ def push_images(opd_id):
         'sheet_updated': sheet_update_ok,
     }
 
+    try:
+        from services.fcm_service import notify_data_sync
+        notify_data_sync(user_id)
+    except Exception as exc:
+        logger.warning("FCM sync notification failed: %s", exc)
+
     if sheet_update_ok:
         response['message'] = 'Images synced successfully'
-        logger.info("=== IMAGE UPLOAD COMPLETE (success) === OPD=%s urls=%s",
-                    opd_id, drive_urls)
         return jsonify(response), 200
     else:
-        response['message'] = (
-            'Images uploaded to Drive, but the Google Sheet was not updated. '
-            'Grant the service account Editor access to the sheet, then re-sync.'
-        )
-        response['error'] = (
-            f'Sheet ID {GOOGLE_SHEET_ID} is not accessible. '
-            f'Add medihive-service@medihive-500611.iam.gserviceaccount.com '
-            f'as Editor on the sheet.'
-        )
-        logger.warning("=== IMAGE UPLOAD PARTIAL === OPD=%s (Drive OK, Sheet FAILED)", opd_id)
+        response['message'] = 'Images uploaded to Drive, but Google Sheet was not updated.'
+        if sheet_error:
+            response['sheet_error_detail'] = sheet_error
         return jsonify(response), 207
 
 
+# ── Clinic Info ─────────────────────────────────────
+
+@sync_bp.route('/clinic-info', methods=['GET'])
+@jwt_required()
+def clinic_info():
+    logger.info("Clinic settings info requested")
+    settings = ClinicSetting.get_first()
+    if settings:
+        return jsonify({'clinic': settings}), 200
+    return jsonify({'error': 'Clinic info not found'}), 404
+
+
+# ── Clear Sheet and Local Data ──────────────────────
+
 @sync_bp.route('/clear-data', methods=['POST'])
 @jwt_required()
-def clear_all_data():
-    """
-    Clear ALL data from the Google Sheet (opd_visits tab) and
-    the backend SQLite database (opd_records, patients, etc.).
-    Returns the number of rows cleared from the sheet.
-    """
-    logger.warning("CLEAR ALL DATA requested by user %s", get_jwt_identity())
-
+def clear_data():
     try:
-        from database import (
-            DEFAULT_ADMIN_NAME,
-            DEFAULT_ADMIN_PASSWORD,
-            DEFAULT_ADMIN_USERNAME,
-            get_db,
-        )
-        import hashlib
-
-        rows_cleared = clear_opd_sheet_data()
-
-        # Additional backend cleanup
-        db = get_db()
-
-        # Re-create the default admin user if it was deleted
-        from datetime import datetime
-        now = datetime.utcnow().isoformat()
-        default_admin_password_hash = hashlib.sha256(
-            DEFAULT_ADMIN_PASSWORD.encode()
-        ).hexdigest()
-
-        # Re-create default user
-        try:
-            db.execute(
-                "INSERT INTO users (username, password, name, created_at) VALUES (%s, %s, %s, %s) ON CONFLICT (username) DO NOTHING",
-                (
-                    DEFAULT_ADMIN_USERNAME,
-                    default_admin_password_hash,
-                    DEFAULT_ADMIN_NAME,
-                    now,
-                )
-            )
-            db.commit()
-        except Exception:
-            db.rollback()
-
-        db.close()
-
+        from sheets_utils import clear_opd_sheet_data
+        row_count = clear_opd_sheet_data()
         return jsonify({
-            'message': f'All data cleared successfully. Removed {rows_cleared} rows from sheet.',
-            'sheet_rows_cleared': rows_cleared,
+            'message': 'Clear data process completed successfully',
+            'sheets_rows_cleared': row_count
         }), 200
-
-    except RuntimeError as e:
-        logger.error("Clear data failed (sheet access error): %s", e)
-        return jsonify({
-            'error': f'Could not clear sheet data: {e}',
-            'detail': 'Verify the service account has EDITOR access to the sheet.'
-        }), 500
     except Exception as e:
-        logger.error("Clear data failed: %s", e)
-        return jsonify({'error': f'Clear data failed: {e}'}), 500
+        logger.error("Failed to clear data: %s", e)
+        return jsonify({'error': str(e)}), 500

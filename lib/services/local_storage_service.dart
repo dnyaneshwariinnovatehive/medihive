@@ -3,13 +3,14 @@ import 'package:hive/hive.dart';
 import '../models/appointment_model.dart';
 import '../repositories/patient_repository.dart';
 import '../repositories/opd_record_repository.dart';
+import '../utils/helpers.dart';
 
 class LocalStorageService {
   // ─── Patient Methods ──────────────────────────────────────────
 
   Future<void> savePatient(Map<String, dynamic> patient) async {
     final repo = PatientRepository();
-    final id = patient['id'] as int? ?? 0;
+    final id = Helpers.toInt(patient['id']);
     if (id == 0) return;
     final nowStr = DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now());
     patient['created_at'] ??= nowStr;

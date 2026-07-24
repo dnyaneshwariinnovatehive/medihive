@@ -6,12 +6,14 @@ class VisitTimelineItem extends StatelessWidget {
   final VisitRecord visit;
   final bool isLast;
   final VoidCallback? onDelete;
+  final VoidCallback? onEdit;
 
   const VisitTimelineItem({
     super.key,
     required this.visit,
     this.isLast = false,
     this.onDelete,
+    this.onEdit,
   });
 
   @override
@@ -139,6 +141,23 @@ class VisitTimelineItem extends StatelessWidget {
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
+                          if (onEdit != null)
+                            GestureDetector(
+                              onTap: onEdit,
+                              child: Container(
+                                padding: const EdgeInsets.all(4),
+                                margin: const EdgeInsets.only(right: 8),
+                                decoration: BoxDecoration(
+                                  color: AppTheme.primary.withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Icon(
+                                  Icons.edit_outlined,
+                                  size: 16,
+                                  color: AppTheme.primary,
+                                ),
+                              ),
+                            ),
                           if (onDelete != null)
                             GestureDetector(
                               onTap: onDelete,

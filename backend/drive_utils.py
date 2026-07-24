@@ -1,41 +1,18 @@
-"""
-drive_service.py
-================
-Uploads patient images to YOUR personal Google Drive using OAuth token.
+"""Google Drive utility functions for MediHive.
 
-WHY OAUTH INSTEAD OF SERVICE ACCOUNT:
-- Service accounts have 0 storage quota (causes storageQuotaExceeded)
-- OAuth token represents YOUR personal Google account
-- Files upload into YOUR Drive using YOUR 15GB quota
-- No quota errors, no shared drives needed
-
-HOW IT WORKS:
-1. One-time: run generate_drive_token.py to authorize
-2. Token saved to drive_token.json (path set in config.py as DRIVE_TOKEN_PATH)
-3. This service loads that token on every upload
-4. Token auto-refreshes — never expires
-
-FOLDER STRUCTURE IN YOUR DRIVE:
-  All images upload directly into the 'MediHive Images' root folder.
-  No subfolders are created — filenames are prefixed with OPD ID to
-  avoid collisions (e.g. R001_image_1.jpeg).
+Extracted from desktop_google/drive_service.py.
+Uses GoogleAuthService for centralized credential management.
 """
 
 import io
-import json
 from pathlib import Path
 
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 from googleapiclient.errors import HttpError
 
-from config import (
-    DRIVE_ROOT_FOLDER_ID,
-    DRIVE_TOKEN_PATH,
-    DRIVE_TOKEN_JSON
-)
+from config import DRIVE_ROOT_FOLDER_ID, DRIVE_TOKEN_PATH
+from services.google_auth_service import GoogleAuthService
 from services.log_service import get_logger
 
 logger = get_logger(__name__)
@@ -44,74 +21,17 @@ SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 
 def get_drive_service():
-    """
-    Load personal OAuth token and return Drive API client.
-    Credentials can come from DRIVE_TOKEN_JSON env var (cloud) or drive_token.json file (local).
-    Token auto-refreshes when expired — no manual action needed.
-    """
-    token_path = Path(DRIVE_TOKEN_PATH)
-    logger.info("DRIVE_AUTH: loading token from path=%s has_env_var=%s",
-                DRIVE_TOKEN_PATH, bool(DRIVE_TOKEN_JSON))
-
-    if DRIVE_TOKEN_JSON:
-        logger.info("DRIVE_AUTH: loading Drive token from DRIVE_TOKEN_JSON env var")
-        try:
-            info = json.loads(DRIVE_TOKEN_JSON)
-            creds = Credentials.from_authorized_user_info(info, SCOPES)
-            logger.info("DRIVE_AUTH: token loaded from env var, valid=%s expired=%s has_refresh=%s",
-                        creds.valid, creds.expired, bool(creds.refresh_token))
-        except Exception as e:
-            logger.error("DRIVE_AUTH: failed to load token from env var: %s", e)
-            raise
-    else:
-        if not token_path.exists():
-            logger.error("DRIVE_AUTH: token file not found at %s", DRIVE_TOKEN_PATH)
-            raise FileNotFoundError(
-                f"drive_token.json not found at: {DRIVE_TOKEN_PATH}\n"
-                "Run once from your project root:\n"
-                "  python generate_drive_token.py"
-            )
-        logger.info("DRIVE_AUTH: loading token from file: %s", token_path)
-        creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
-        logger.info("DRIVE_AUTH: token loaded from file, valid=%s expired=%s has_refresh=%s",
-                    creds.valid, creds.expired, bool(creds.refresh_token))
-
-    # Auto-refresh if expired
-    if not creds.valid:
-        if creds.expired and creds.refresh_token:
-            logger.info("DRIVE_AUTH: OAuth token expired — refreshing...")
-            try:
-                creds.refresh(Request())
-                token_str = creds.to_json()
-                logger.info("DRIVE_AUTH: token refresh SUCCESS")
-                if DRIVE_TOKEN_JSON:
-                    pass  # Can't persist env var, logging is fine
-                else:
-                    with open(str(token_path), "w", encoding="utf-8") as f:
-                        f.write(token_str)
-                    logger.info("DRIVE_AUTH: refreshed token saved to file")
-            except Exception as e:
-                logger.error("DRIVE_AUTH: token refresh FAILED: %s", e)
-                raise
-        else:
-            logger.error("DRIVE_AUTH: token invalid and cannot be refreshed. valid=%s expired=%s has_refresh=%s",
-                         creds.valid, creds.expired, bool(creds.refresh_token))
-            raise RuntimeError(
-                "OAuth token is invalid and cannot be refreshed.\n"
-                "Run again: python generate_drive_token.py"
-            )
-
-    service = build("drive", "v3", credentials=creds)
-    logger.info("DRIVE_AUTH: Drive API service created successfully")
-    return service
+    auth = GoogleAuthService(DRIVE_TOKEN_PATH)
+    creds = auth.get_credentials()
+    if creds is None:
+        raise RuntimeError(
+            "Google Drive credentials not available. "
+            "Run utils/generate_drive_token.py first."
+        )
+    return build("drive", "v3", credentials=creds)
 
 
 def check_existing_drive_files(opd_id, visit_date, expected_count):
-    """
-    Check if OPD images already exist in the root 'MediHive Images' folder.
-    Returns list of public URLs if enough files found.
-    Returns empty list if none or fewer files found.
-    """
     if not DRIVE_ROOT_FOLDER_ID:
         return []
 
@@ -146,21 +66,13 @@ def check_existing_drive_files(opd_id, visit_date, expected_count):
 
 
 def upload_images_to_drive(opd_id, image_records, visit_date):
-    """
-    Upload all images for one OPD visit to the existing 'MediHive Images' folder.
-    No subfolders are created — all images go directly into the root folder.
-    Returns list of public view URLs in same order as image_records.
-    """
-    if not DRIVE_ROOT_FOLDER_ID:
-        logger.error("DRIVE_ROOT_FOLDER_ID is empty in config.py")
-        raise ValueError(
-            "DRIVE_ROOT_FOLDER_ID is empty in config.py\n"
-            "Open your MediHive Images folder in Drive, copy the ID from the URL."
-        )
+    drive_root_folder_id = DRIVE_ROOT_FOLDER_ID
+    if not drive_root_folder_id:
+        raise ValueError("DRIVE_ROOT_FOLDER_ID is empty")
 
     logger.info(
         "DRIVE_UPLOAD: Starting batch upload: OPD=%s root_folder=%s record_count=%d",
-        opd_id, DRIVE_ROOT_FOLDER_ID, len(image_records)
+        opd_id, drive_root_folder_id, len(image_records)
     )
 
     service = get_drive_service()
@@ -178,7 +90,6 @@ def upload_images_to_drive(opd_id, image_records, visit_date):
                     opd_id, idx, local_path, file_size)
 
         try:
-            # Prefix filename with OPD ID to avoid name collisions in flat folder
             safe_name = f"{opd_id}_{local_path.name}"
             logger.info("DRIVE_UPLOAD: Creating Drive file: name=%s", safe_name)
 
@@ -187,7 +98,7 @@ def upload_images_to_drive(opd_id, image_records, visit_date):
             uploaded = service.files().create(
                 body={
                     "name": safe_name,
-                    "parents": [DRIVE_ROOT_FOLDER_ID]
+                    "parents": [drive_root_folder_id]
                 },
                 media_body=media,
                 fields="id"
@@ -196,8 +107,6 @@ def upload_images_to_drive(opd_id, image_records, visit_date):
             file_id = uploaded["id"]
             logger.info("DRIVE_UPLOAD: File created: file_id=%s name=%s", file_id, safe_name)
 
-            # Make file publicly viewable (anyone with link)
-            logger.info("DRIVE_UPLOAD: Setting public permission for file_id=%s", file_id)
             service.permissions().create(
                 fileId=file_id,
                 body={"type": "anyone", "role": "reader"}
@@ -223,18 +132,9 @@ def upload_images_to_drive(opd_id, image_records, visit_date):
 
 
 def upload_image_fileobj_to_drive(opd_id, file_storage, index):
-    """
-    Upload a single image from a Flask FileStorage object directly to Drive.
-    Uses in-memory BytesIO to avoid Windows file-locking issues.
-    Returns the public Drive URL.
-
-    This function is cloud-compatible — it does not require a permanent
-    local storage directory.
-    """
     logger.info("DRIVE_UPLOAD_FILEOBJ: START: OPD=%s index=%d filename=%s content_type=%s",
                 opd_id, index, file_storage.filename, file_storage.content_type)
 
-    # Read file content into memory — no temp file, no Windows locking
     content = file_storage.read()
     content_len = len(content)
     logger.info("DRIVE_UPLOAD_FILEOBJ: Read file content: OPD=%s index=%d size=%d bytes",
@@ -266,7 +166,7 @@ def upload_image_fileobj_to_drive(opd_id, file_storage, index):
                      opd_id, index, e)
         raise
     except Exception as e:
-        logger.error("DRIVE_UPLOAD_FILEOBJ: files().create() FAILED (non-HTTP): OPD=%s index=%d error=%s",
+        logger.error("DRIVE_UPLOAD_FILEOBJ: files().create() FAILED: OPD=%s index=%d error=%s",
                      opd_id, index, e)
         raise
 

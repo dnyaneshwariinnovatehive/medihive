@@ -7,10 +7,11 @@ import '../models/appointment.dart';
 import '../models/appointment_model.dart';
 import '../repositories/calendar_notes_repository.dart';
 import '../repositories/patient_repository.dart';
-import '../repositories/opd_record_repository.dart';
 import 'notification_provider.dart';
 import '../services/daily_summary_service.dart';
+import '../services/sync_manager.dart';
 import '../utils/sync_id_generator.dart';
+import '../utils/helpers.dart';
 
 class AppointmentProvider extends ChangeNotifier {
   final CalendarNotesRepository _notesRepo = CalendarNotesRepository();
@@ -71,7 +72,6 @@ class AppointmentProvider extends ChangeNotifier {
   AppointmentProvider() {
     _loadFromHive();
     _loadNotes();
-    _refreshHasRealData();
     _apptSubscription = Hive.box<AppointmentModel>('appointments').watch().listen((_) {
       _requestReload();
     });
@@ -132,21 +132,6 @@ class AppointmentProvider extends ChangeNotifier {
           a.dateTime.month == _currentDate.month &&
           a.dateTime.year == _currentDate.year,
       ).toList();
-
-  bool _hasRealDataCached = false;
-
-  Future<void> _refreshHasRealData() async {
-    try {
-      final patientCount = await PatientRepository().count();
-      final opdCount = await OpdRecordRepository().count();
-      final apptCount = Hive.box<AppointmentModel>('appointments').length;
-      _hasRealDataCached = patientCount > 0 || opdCount > 0 || apptCount > 0;
-    } catch (_) {
-      _hasRealDataCached = false;
-    }
-  }
-
-  bool get _hasRealData => _hasRealDataCached;
 
   List<Appointment> get upcomingFollowUps {
     final now = DateTime.now();
@@ -344,7 +329,7 @@ class AppointmentProvider extends ChangeNotifier {
       final existing = await _notesRepo.getByDate(sqlDate);
       final now = DateTime.now().toIso8601String();
       if (existing != null) {
-        await _notesRepo.update(existing['id'] as int, {
+        await _notesRepo.update(Helpers.toInt(existing['id']), {
           'note_text': noteText,
           'updated_at': now,
         });
@@ -357,6 +342,10 @@ class AppointmentProvider extends ChangeNotifier {
           'updated_at': now,
         });
       }
+      // Trigger sync so other devices get updated notes
+      try {
+        SyncManager().forceSyncNow();
+      } catch (_) {}
     } catch (e, st) {
       debugPrint('SYNC QUEUE INSERT FAILED: $e');
       debugPrintStack(stackTrace: st);
@@ -368,6 +357,10 @@ class AppointmentProvider extends ChangeNotifier {
     try {
       final sqlDate = _hiveKeyToSqlDate(hiveKey);
       await _notesRepo.deleteByDate(sqlDate);
+      // Trigger sync so other devices get the deletion
+      try {
+        SyncManager().forceSyncNow();
+      } catch (_) {}
     } catch (e, st) {
       debugPrint('DELETE NOTES FAILED: $e');
       debugPrintStack(stackTrace: st);

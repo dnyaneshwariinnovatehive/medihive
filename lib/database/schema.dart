@@ -1,4 +1,9 @@
-const int databaseVersion = 4;
+/// SQLite schema contract copied from `clinic (1).db`.
+///
+/// Do not add sync-only columns, defaults, indexes, or tables here.  Sync
+/// identity and revision data live in Hive so that a clinic database can be
+/// exchanged with the reference application without schema drift.
+const int databaseVersion = 13;
 
 const String tablePatients = 'patients';
 const String tableOpdVisits = 'opd_visits';
@@ -9,13 +14,11 @@ const String tableMedicines = 'medicines';
 const String tableSymptomsMaster = 'symptoms_master';
 const String tablePatientImages = 'patient_images';
 const String tableSyncQueue = 'sync_queue';
-const String tableCloudSyncQueue = 'cloud_sync_queue';
-const String tableDeviceRegistration = 'device_registration';
 
-String get createPatientsTable => '''
+String get createPatientsTable =>
+    '''
   CREATE TABLE $tablePatients (
     id INTEGER NOT NULL,
-    sync_id TEXT,
     full_name VARCHAR NOT NULL,
     mobile_number VARCHAR NOT NULL,
     alternate_mobile VARCHAR,
@@ -24,14 +27,13 @@ String get createPatientsTable => '''
     age INTEGER,
     blood_group VARCHAR,
     address VARCHAR,
-    clinic_id TEXT,
     created_at DATETIME,
-    updated_at DATETIME,
     PRIMARY KEY (id)
   )
 ''';
 
-String get createOpdVisitsTable => '''
+String get createOpdVisitsTable =>
+    '''
   CREATE TABLE $tableOpdVisits (
     id INTEGER NOT NULL,
     opd_id VARCHAR NOT NULL,
@@ -51,9 +53,7 @@ String get createOpdVisitsTable => '''
     payment_mode VARCHAR,
     next_visit_date DATE,
     followup_status VARCHAR,
-    clinic_id TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME,
     medicines TEXT,
     panchakarma_notes TEXT,
     PRIMARY KEY (id),
@@ -61,7 +61,8 @@ String get createOpdVisitsTable => '''
   )
 ''';
 
-String get createCalendarNotesTable => '''
+String get createCalendarNotesTable =>
+    '''
   CREATE TABLE $tableCalendarNotes (
     id INTEGER NOT NULL,
     note_date DATE NOT NULL,
@@ -73,7 +74,8 @@ String get createCalendarNotesTable => '''
   )
 ''';
 
-String get createClinicSettingsTable => '''
+String get createClinicSettingsTable =>
+    '''
   CREATE TABLE $tableClinicSettings (
     id INTEGER NOT NULL,
     doctor_name VARCHAR(255),
@@ -97,7 +99,8 @@ String get createClinicSettingsTable => '''
   )
 ''';
 
-String get createUsersTable => '''
+String get createUsersTable =>
+    '''
   CREATE TABLE $tableUsers (
     id INTEGER NOT NULL,
     username VARCHAR(50) NOT NULL,
@@ -111,7 +114,8 @@ String get createUsersTable => '''
   )
 ''';
 
-String get createMedicinesTable => '''
+String get createMedicinesTable =>
+    '''
   CREATE TABLE $tableMedicines (
     id INTEGER NOT NULL,
     name VARCHAR NOT NULL,
@@ -120,14 +124,16 @@ String get createMedicinesTable => '''
   )
 ''';
 
-String get createSymptomsMasterTable => '''
+String get createSymptomsMasterTable =>
+    '''
   CREATE TABLE $tableSymptomsMaster (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE
   )
 ''';
 
-String get createPatientImagesTable => '''
+String get createPatientImagesTable =>
+    '''
   CREATE TABLE $tablePatientImages (
     id INTEGER NOT NULL,
     patient_id INTEGER NOT NULL,
@@ -144,88 +150,54 @@ String get createPatientImagesTable => '''
   )
 ''';
 
-String get createSyncQueueTable => '''
+String get createSyncQueueTable =>
+    '''
   CREATE TABLE $tableSyncQueue (
     id INTEGER NOT NULL,
     entity_type VARCHAR(20) NOT NULL,
     entity_id VARCHAR(100) NOT NULL,
-    operation VARCHAR(20) DEFAULT 'upsert',
     status VARCHAR(20),
     retry_count INTEGER,
     last_error TEXT,
-    clinic_id TEXT,
     created_at DATETIME,
     last_attempt DATETIME,
     PRIMARY KEY (id)
   )
 ''';
 
-String get createCloudSyncQueueTable => '''
-  CREATE TABLE $tableCloudSyncQueue (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    table_name TEXT NOT NULL,
-    operation TEXT NOT NULL,
-    record_id TEXT NOT NULL,
-    payload TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    sync_status TEXT DEFAULT 'pending',
-    retry_count INTEGER DEFAULT 0
-  )
-''';
-
-String get createDeviceRegistrationTable => '''
-  CREATE TABLE $tableDeviceRegistration (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    device_id TEXT NOT NULL UNIQUE,
-    device_name TEXT,
-    clinic_id TEXT,
-    fcm_token TEXT,
-    app_version TEXT,
-    last_seen TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )
-''';
-
-String get createixPatientsId => '''
+String get createixPatientsId =>
+    '''
   CREATE INDEX ix_patients_id ON $tablePatients (id)
 ''';
 
-String get createixPatientsSyncId => '''
-  CREATE INDEX ix_patients_sync_id ON $tablePatients (sync_id)
-''';
-
-String get createixOpdVisitsId => '''
+String get createixOpdVisitsId =>
+    '''
   CREATE INDEX ix_opd_visits_id ON $tableOpdVisits (id)
 ''';
 
-String get createixOpdVisitsOpdId => '''
+String get createixOpdVisitsOpdId =>
+    '''
   CREATE UNIQUE INDEX ix_opd_visits_opd_id ON $tableOpdVisits (opd_id)
 ''';
 
-String get createixPatientImagesId => '''
+String get createixPatientImagesId =>
+    '''
   CREATE INDEX ix_patient_images_id ON $tablePatientImages (id)
 ''';
 
-String get createixSyncQueueId => '''
+String get createixSyncQueueId =>
+    '''
   CREATE INDEX ix_sync_queue_id ON $tableSyncQueue (id)
 ''';
 
-String get createixUsersId => '''
+String get createixUsersId =>
+    '''
   CREATE INDEX ix_users_id ON $tableUsers (id)
 ''';
 
-String get createixClinicSettingsId => '''
+String get createixClinicSettingsId =>
+    '''
   CREATE INDEX ix_clinic_settings_id ON $tableClinicSettings (id)
-''';
-
-String get createixCloudSyncQueueStatus => '''
-  CREATE INDEX ix_cloud_sync_queue_status ON $tableCloudSyncQueue (sync_status)
-''';
-
-String get createixDeviceRegistrationDeviceId => '''
-  CREATE UNIQUE INDEX ix_device_registration_device_id ON $tableDeviceRegistration (device_id)
 ''';
 
 List<String> get createStatements => [
@@ -238,16 +210,11 @@ List<String> get createStatements => [
   createSymptomsMasterTable,
   createPatientImagesTable,
   createSyncQueueTable,
-  createCloudSyncQueueTable,
-  createDeviceRegistrationTable,
   createixPatientsId,
-  createixPatientsSyncId,
   createixOpdVisitsId,
   createixOpdVisitsOpdId,
   createixPatientImagesId,
   createixSyncQueueId,
   createixUsersId,
   createixClinicSettingsId,
-  createixCloudSyncQueueStatus,
-  createixDeviceRegistrationDeviceId,
 ];

@@ -3,6 +3,7 @@ import '../models/collection_item.dart';
 import '../models/patient.dart';
 import '../repositories/opd_record_repository.dart';
 import '../repositories/patient_repository.dart';
+import '../utils/helpers.dart';
 
 class DashboardProvider extends ChangeNotifier {
   final OpdRecordRepository _opdRepo = OpdRecordRepository();
@@ -87,7 +88,7 @@ class DashboardProvider extends ChangeNotifier {
       return (bDate ?? DateTime.now()).compareTo(aDate ?? DateTime.now());
     });
     return unique.take(5).map((opd) {
-      final pid = opd['patient_id'] as int? ?? 0;
+      final pid = Helpers.toInt(opd['patient_id']);
       final patient = _allPatientRows.cast<Map<String, dynamic>?>().firstWhere(
         (p) => p?['id'] == pid,
         orElse: () => null,
@@ -330,7 +331,7 @@ class DashboardProvider extends ChangeNotifier {
       }).toList();
 
       return todayRecords.map((r) {
-        final pid = r['patient_id'] as int? ?? 0;
+        final pid = Helpers.toInt(r['patient_id']);
         final patient = _allPatientRows.cast<Map<String, dynamic>?>().firstWhere(
           (p) => p?['id'] == pid,
           orElse: () => null,

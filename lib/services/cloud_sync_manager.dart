@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -10,9 +8,12 @@ import 'connectivity_service.dart';
 import '../models/appointment_model.dart';
 import '../repositories/patient_repository.dart';
 import '../repositories/opd_record_repository.dart';
-import '../repositories/cloud_sync_queue_repository.dart';
-import '../repositories/device_registration_repository.dart';
 import '../repositories/patient_images_repository.dart';
+import '../repositories/calendar_notes_repository.dart';
+import '../repositories/clinic_settings_repository.dart';
+import '../repositories/medicines_repository.dart';
+import '../repositories/symptoms_master_repository.dart';
+import '../utils/helpers.dart';
 import 'dart:math';
 
 enum CloudSyncState {
@@ -37,9 +38,11 @@ class CloudSyncManager extends ChangeNotifier {
   final ConnectivityService _connectivity = ConnectivityService();
   final PatientRepository _patientRepo = PatientRepository();
   final OpdRecordRepository _opdRepo = OpdRecordRepository();
-  final CloudSyncQueueRepository _cloudQueueRepo = CloudSyncQueueRepository();
-  final DeviceRegistrationRepository _deviceRegRepo = DeviceRegistrationRepository();
   final PatientImagesRepository _imagesRepo = PatientImagesRepository();
+  final CalendarNotesRepository _calendarNotesRepo = CalendarNotesRepository();
+  final ClinicSettingsRepository _clinicSettingsRepo = ClinicSettingsRepository();
+  final MedicinesRepository _medicinesRepo = MedicinesRepository();
+  final SymptomsMasterRepository _symptomsRepo = SymptomsMasterRepository();
 
   static final CloudSyncManager _instance = CloudSyncManager._internal();
   factory CloudSyncManager() => _instance;
@@ -112,25 +115,13 @@ class CloudSyncManager extends ChangeNotifier {
   }
 
   /// Notify that a local change occurred.
-  /// Adds an entry to cloud_sync_queue for later upload.
   Future<void> notifyChange({
     required String tableName,
     required String operation,
     required String recordId,
     Map<String, dynamic>? payload,
   }) async {
-    if (!_isRunning) return;
-    try {
-      await _cloudQueueRepo.insert({
-        'table_name': tableName,
-        'operation': operation,
-        'record_id': recordId,
-        'payload': payload != null ? jsonEncode(payload) : null,
-      });
-      debugPrint('CLOUD QUEUE: added $operation $tableName $recordId');
-    } catch (e) {
-      debugPrint('CLOUD QUEUE: insert failed: $e');
-    }
+    debugPrint('CLOUD QUEUE: notifyChange called for $operation $tableName $recordId (queue removed)');
   }
 
   /// Force an immediate cloud sync.
@@ -171,9 +162,6 @@ class CloudSyncManager extends ChangeNotifier {
       // 2. Download remote changes
       await _downloadChanges();
 
-      // 3. Clear synced queue entries
-      await _cloudQueueRepo.clearSynced();
-
       _syncCount++;
       _state = CloudSyncState.synced;
       debugPrint('CLOUD SYNC: cycle $_syncCount complete');
@@ -185,187 +173,108 @@ class CloudSyncManager extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Upload all pending cloud_sync_queue entries.
+  /// Upload all local changes directly (no queue tracking).
   Future<void> _uploadChanges() async {
-    final pending = await _cloudQueueRepo.getPending();
-    if (pending.isEmpty) {
-      debugPrint('CLOUD UPLOAD: nothing pending');
-      return;
-    }
-
-    // Group pending entries by table_name to build payloads
     final patients = <Map<String, dynamic>>[];
     final opdRecords = <Map<String, dynamic>>[];
     final appointments = <Map<String, dynamic>>[];
     final deletedEntities = <Map<String, String>>[];
-    final uploadedOpdRecordIds = <String>[];
+    final calendarNotes = <Map<String, dynamic>>[];
+    final clinicSettings = <Map<String, dynamic>>[];
+    final medicines = <Map<String, dynamic>>[];
+    final symptoms = <Map<String, dynamic>>[];
 
-    for (final entry in pending) {
-      final tableName = entry['table_name'] as String? ?? '';
-      final operation = entry['operation'] as String? ?? 'upsert';
-      final recordId = entry['record_id'] as String? ?? '';
-
-      if (operation == 'delete') {
-        deletedEntities.add({'entity_type': tableName, 'entity_id': recordId});
-        continue;
+    try {
+      final allPatients = await _patientRepo.getAll();
+      for (final row in allPatients) {
+        patients.add(await _patientRowToMap(row));
       }
-
-      try {
-        if (tableName == 'patients') {
-          final row = await _patientRepo.getBySyncId(recordId);
-          if (row != null) {
-            patients.add(await _patientRowToMap(row));
-          }
-        } else if (tableName == 'opd_visits') {
-          final row = await _opdRepo.getByOpdId(recordId);
-          if (row != null) {
-            opdRecords.add(await _opdRowToMap(row));
-            uploadedOpdRecordIds.add(recordId);
-          }
-        } else if (tableName == 'appointments') {
-          try {
-            final box = Hive.box<AppointmentModel>('appointments');
-            final appt = box.get(recordId);
-            if (appt != null) {
-              appointments.add(appt.toJson());
-            }
-          } catch (_) {}
-        }
-      } catch (e) {
-        debugPrint('CLOUD UPLOAD: error building payload for $tableName $recordId: $e');
-      }
+    } catch (e) {
+      debugPrint('CLOUD UPLOAD: error building patients: $e');
     }
 
-    if (patients.isEmpty && opdRecords.isEmpty && appointments.isEmpty && deletedEntities.isEmpty) {
-      debugPrint('CLOUD UPLOAD: nothing to upload after building payloads');
+    try {
+      final allOpd = await _opdRepo.getAll();
+      for (final row in allOpd) {
+        try {
+          opdRecords.add(await _opdRowToMap(row));
+        } catch (e) {
+          debugPrint('CLOUD UPLOAD: error mapping OPD row: $e');
+        }
+      }
+    } catch (e) {
+      debugPrint('CLOUD UPLOAD: error reading opd records: $e');
+    }
+
+    try {
+      final box = Hive.box<AppointmentModel>('appointments');
+      for (final appt in box.values) {
+        appointments.add(appt.toJson());
+      }
+    } catch (_) {}
+
+    // Build calendar_notes
+    try {
+      final allNotes = await _calendarNotesRepo.getAll();
+      for (final note in allNotes) {
+        calendarNotes.add(Map<String, dynamic>.from(note));
+      }
+    } catch (e) {
+      debugPrint('CLOUD UPLOAD: error reading calendar_notes: $e');
+    }
+
+    // Build clinic_settings
+    try {
+      final settings = await _clinicSettingsRepo.getFirst();
+      if (settings != null) {
+        clinicSettings.add(Map<String, dynamic>.from(settings));
+      }
+    } catch (e) {
+      debugPrint('CLOUD UPLOAD: error reading clinic_settings: $e');
+    }
+
+    // Build medicines
+    try {
+      final allMeds = await _medicinesRepo.getAll();
+      for (final med in allMeds) {
+        medicines.add(Map<String, dynamic>.from(med));
+      }
+    } catch (e) {
+      debugPrint('CLOUD UPLOAD: error reading medicines: $e');
+    }
+
+    // Build symptoms
+    try {
+      final allSyms = await _symptomsRepo.getAll();
+      for (final sym in allSyms) {
+        symptoms.add(Map<String, dynamic>.from(sym));
+      }
+    } catch (e) {
+      debugPrint('CLOUD UPLOAD: error reading symptoms: $e');
+    }
+
+    if (patients.isEmpty && opdRecords.isEmpty && appointments.isEmpty && deletedEntities.isEmpty && calendarNotes.isEmpty && clinicSettings.isEmpty && medicines.isEmpty && symptoms.isEmpty) {
+      debugPrint('CLOUD UPLOAD: nothing to upload');
       return;
     }
 
-    debugPrint('CLOUD DEVICE DEBUG: upload clinic_id=$_clinicId device_id=$_deviceId');
-    debugPrint('CLOUD DEVICE DEBUG: upload patients=${patients.length} opd=${opdRecords.length} appts=${appointments.length} deleted=${deletedEntities.length}');
+    debugPrint('CLOUD UPLOAD: patients=${patients.length} opd=${opdRecords.length} appts=${appointments.length} calendarNotes=${calendarNotes.length} clinicSettings=${clinicSettings.length} medicines=${medicines.length} symptoms=${symptoms.length}');
     try {
-      final response = await ApiService.cloudUpload(
+      await ApiService.cloudUpload(
         deviceId: _deviceId!,
         clinicId: _clinicId!,
         patients: patients,
         opdRecords: opdRecords,
         appointments: appointments,
         deletedEntities: deletedEntities,
+        calendarNotes: calendarNotes,
+        clinicSettings: clinicSettings,
+        medicines: medicines,
+        symptoms: symptoms,
       );
-      debugPrint('CLOUD_DEBUG: _uploadChanges ApiService.cloudUpload returned response=$response');
-      debugPrint('CLOUD DEVICE DEBUG: upload response keys=${response.keys.join(", ")}');
-      debugPrint('CLOUD DEVICE DEBUG: stored patients=${(response["results"]?["patients"] as List?)?.length ?? 0}');
-      debugPrint('CLOUD DEVICE DEBUG: stored opd_records=${(response["results"]?["opd_records"] as List?)?.length ?? 0}');
-
-      // Mark uploaded entries as synced
-      for (final entry in pending) {
-        await _cloudQueueRepo.markSynced(entry['id'] as int);
-      }
-
-      // Upload images for OPD records that have pending local images.
-      // Images can be stored in two places:
-      //   1. patient_images SQLite table (file on disk, set by data migration)
-      //   2. Hive 'opd_documents' box (base64, set by normal OPD save flow)
-      if (uploadedOpdRecordIds.isNotEmpty) {
-        debugPrint('CLOUD IMAGE DEBUG: uploadedOpdRecordIds=$uploadedOpdRecordIds');
-        try {
-          final opdVisitIdsWithPending =
-              await _imagesRepo.getDistinctOpdVisitIdsWithPending();
-          final docBox = Hive.box('opd_documents');
-          for (final uploadedId in uploadedOpdRecordIds) {
-            final localRow = await _opdRepo.getByOpdId(uploadedId);
-            if (localRow == null) {
-              debugPrint('CLOUD IMAGE DEBUG: localRow null for uploadedId=$uploadedId');
-              continue;
-            }
-            final localOpdId = localRow['id'] as int;
-            debugPrint(
-                'CLOUD IMAGE DEBUG: uploadedId=$uploadedId mapped to localOpdId=$localOpdId');
-
-            File? hiveTempFile;
-            List<File> imageFiles = [];
-
-            // Try SQLite patient_images first
-            if (opdVisitIdsWithPending.contains(localOpdId)) {
-              final pendingImages =
-                  await _imagesRepo.getPendingByOpdVisitId(localOpdId);
-              debugPrint(
-                  'CLOUD IMAGE DEBUG: found local images from SQLite count=${pendingImages.length}');
-              for (final img in pendingImages) {
-                final path = img['file_path'] as String?;
-                debugPrint('CLOUD IMAGE DEBUG: SQLite image path=$path');
-                if (path != null && path.isNotEmpty) {
-                  final file = File(path);
-                  final exists = await file.exists();
-                  debugPrint(
-                      'CLOUD IMAGE DEBUG: SQLite file exists=$exists for path=$path');
-                  if (exists) {
-                    imageFiles.add(file);
-                  }
-                }
-              }
-            }
-
-            // If nothing in SQLite, try Hive opd_documents box
-            if (imageFiles.isEmpty && docBox.containsKey(uploadedId)) {
-              final raw = docBox.get(uploadedId);
-              debugPrint(
-                  'CLOUD IMAGE DEBUG: found Hive opd_documents entry for uploadedId=$uploadedId raw type=${raw.runtimeType}');
-              if (raw != null) {
-                try {
-                  final bytes = base64Decode(raw.toString());
-                  hiveTempFile = File(
-                    '${Directory.systemTemp.path}/${uploadedId}_${DateTime.now().microsecondsSinceEpoch}.jpg',
-                  );
-                  await hiveTempFile.writeAsBytes(bytes);
-                  imageFiles = [hiveTempFile];
-                  debugPrint(
-                      'CLOUD IMAGE DEBUG: decoded Hive image to temp file path=${hiveTempFile.path}');
-                } catch (e) {
-                  debugPrint(
-                      'CLOUD IMAGE DEBUG: failed to decode Hive image: $e');
-                }
-              }
-            }
-
-            if (imageFiles.isEmpty) {
-              debugPrint(
-                  'CLOUD IMAGE: no valid local files for OPD $uploadedId (neither SQLite nor Hive)');
-              continue;
-            }
-
-            debugPrint(
-                'CLOUD IMAGE DEBUG: calling ApiService.cloudUploadImages(opdId=$uploadedId, files=${imageFiles.length})');
-            await ApiService.cloudUploadImages(uploadedId, imageFiles);
-
-            // Clean up based on source
-            if (opdVisitIdsWithPending.contains(localOpdId)) {
-              await _imagesRepo.markSyncedByOpdVisitId(localOpdId);
-              debugPrint(
-                  'CLOUD IMAGE: SQLite images marked synced for OPD $uploadedId');
-            }
-            if (docBox.containsKey(uploadedId)) {
-              await docBox.delete(uploadedId);
-              debugPrint(
-                  'CLOUD IMAGE: Hive opd_documents entry deleted for OPD $uploadedId');
-            }
-            // Delete temp file if we created one
-            if (hiveTempFile != null && await hiveTempFile.exists()) {
-              await hiveTempFile.delete();
-              debugPrint(
-                  'CLOUD IMAGE DEBUG: deleted temp file ${hiveTempFile.path}');
-            }
-            debugPrint('CLOUD IMAGE: completed for OPD $uploadedId');
-          }
-        } catch (e) {
-          debugPrint('CLOUD IMAGE: upload error (non-fatal): $e');
-        }
-      }
-
       debugPrint('CLOUD UPLOAD: completed');
     } catch (e) {
-      debugPrint('CLOUD_DEBUG: _uploadChanges CAUGHT: $e');
-      debugPrint('CLOUD_DEBUG: _uploadChanges stack: ${StackTrace.current}');
+      debugPrint('CLOUD UPLOAD: error: $e');
       rethrow;
     }
   }
@@ -373,17 +282,18 @@ class CloudSyncManager extends ChangeNotifier {
   /// Download remote changes and apply them locally.
   Future<void> _downloadChanges() async {
     final prefs = await SharedPreferences.getInstance();
-    final lastSync = prefs.getString('last_cloud_sync') ?? '';
+    final String lastSync;
 
-    // On first ever sync (fresh install), skip download to avoid
-    // populating a new device with all remote cloud data. Only upload
-    // local changes should happen. Subsequent syncs will download
-    // incrementally using the stored lastSync timestamp.
-    if (lastSync.isEmpty) {
-      debugPrint('CLOUD DOWNLOAD: first sync — skipping download to keep fresh install clean');
-      final now = DateTime.now().toUtc().toIso8601String();
-      await prefs.setString('last_cloud_sync', now);
-      return;
+    // On first ever sync (fresh install), use epoch timestamp so ALL
+    // existing clinic data is downloaded. Do NOT skip — the cloud is the
+    // source of truth and a fresh install must see all records from other
+    // devices in the same clinic.
+    final rawLastSync = prefs.getString('last_cloud_sync') ?? '';
+    if (rawLastSync.isEmpty) {
+      lastSync = '2000-01-01T00:00:00';
+      debugPrint('CLOUD DOWNLOAD: first sync — using epoch default to download all existing clinic data');
+    } else {
+      lastSync = rawLastSync;
     }
 
     debugPrint('CLOUD DEVICE DEBUG: download clinic_id=$_clinicId device_id=$_deviceId last_sync=$lastSync');
@@ -398,8 +308,12 @@ class CloudSyncManager extends ChangeNotifier {
     final remoteOpd = response['opd_records'] as List<dynamic>? ?? [];
     final remoteAppts = response['appointments'] as List<dynamic>? ?? [];
     final remoteDeleted = response['deleted_entities'] as List<dynamic>? ?? [];
+    final remoteCalendarNotes = response['calendar_notes'] as List<dynamic>? ?? [];
+    final remoteClinicSettings = response['clinic_settings'] as List<dynamic>? ?? [];
+    final remoteMedicines = response['medicines'] as List<dynamic>? ?? [];
+    final remoteSymptoms = response['symptoms'] as List<dynamic>? ?? [];
 
-    debugPrint('CLOUD DEVICE DEBUG: download patients=${remotePatients.length} opd=${remoteOpd.length} appts=${remoteAppts.length} deleted=${remoteDeleted.length}');
+    debugPrint('CLOUD DEVICE DEBUG: download patients=${remotePatients.length} opd=${remoteOpd.length} appts=${remoteAppts.length} deleted=${remoteDeleted.length} calendarNotes=${remoteCalendarNotes.length} clinicSettings=${remoteClinicSettings.length} medicines=${remoteMedicines.length} symptoms=${remoteSymptoms.length}');
 
     // Apply patients (last-write-wins)
     for (final json in remotePatients) {
@@ -416,7 +330,7 @@ class CloudSyncManager extends ChangeNotifier {
         if (existing == null ||
             (remoteUpdatedAt != null && localUpdatedAt != null && remoteUpdatedAt.isAfter(localUpdatedAt))) {
           if (existing != null) {
-            final sqliteId = existing['id'] as int;
+            final sqliteId = Helpers.toInt(existing['id']);
             await _patientRepo.update(sqliteId, _remotePatientToRow(map, sqliteId, remoteId));
           } else {
             final maxId = await _patientRepo.getMaxId();
@@ -444,7 +358,7 @@ class CloudSyncManager extends ChangeNotifier {
         if (existing == null ||
             (remoteUpdatedAt != null && localUpdatedAt != null && remoteUpdatedAt.isAfter(localUpdatedAt))) {
           final localId = existing != null
-              ? existing['id'] as int
+              ? Helpers.toInt(existing['id'])
               : (await _opdRepo.getMaxId()) + 1;
           final row = await _remoteOpdToRow(map, localId);
           if (existing != null) {
@@ -454,7 +368,7 @@ class CloudSyncManager extends ChangeNotifier {
           }
 
           // Ensure follow-up appointment in Hive if next_visit_date is set
-          final nextVisit = map['next_visit']?.toString() ?? '';
+          final nextVisit = map['next_visit_date']?.toString() ?? '';
           if (nextVisit.isNotEmpty) {
             final visitDate = DateTime.tryParse(nextVisit);
             if (visitDate != null) {
@@ -499,6 +413,97 @@ class CloudSyncManager extends ChangeNotifier {
       }
     }
 
+    // Apply calendar_notes (last-write-wins)
+    for (final json in remoteCalendarNotes) {
+      try {
+        final map = Map<String, dynamic>.from(json as Map);
+        final noteDate = map['note_date']?.toString() ?? '';
+        if (noteDate.isEmpty) continue;
+
+        final existing = await _calendarNotesRepo.getByDate(noteDate);
+        final remoteUpdatedAt = DateTime.tryParse(map['updated_at']?.toString() ?? '');
+        final localUpdatedAt = DateTime.tryParse(
+          existing?['updated_at'] as String? ?? existing?['created_at'] as String? ?? '',
+        );
+
+        if (existing == null ||
+            (remoteUpdatedAt != null && localUpdatedAt != null && remoteUpdatedAt.isAfter(localUpdatedAt))) {
+          final row = <String, dynamic>{
+            'note_date': noteDate,
+            'note_text': map['note_text']?.toString() ?? '',
+            'created_at': map['created_at']?.toString() ?? DateTime.now().toIso8601String(),
+            'updated_at': map['updated_at']?.toString() ?? DateTime.now().toIso8601String(),
+          };
+          if (existing != null) {
+            await _calendarNotesRepo.updateByDate(noteDate, row);
+          } else {
+            await _calendarNotesRepo.insert(row);
+          }
+          debugPrint('CLOUD DOWNLOAD: pulled calendar note for $noteDate');
+        }
+      } catch (e) {
+        debugPrint('CLOUD DOWNLOAD: calendar note error: $e');
+      }
+    }
+
+    // Apply clinic_settings (singleton, last-write-wins)
+    for (final json in remoteClinicSettings) {
+      try {
+        final map = Map<String, dynamic>.from(json as Map);
+        final existing = await _clinicSettingsRepo.getFirst();
+        final remoteUpdatedAt = DateTime.tryParse(map['updated_at']?.toString() ?? '');
+        final localUpdatedAt = DateTime.tryParse(
+          existing?['updated_at'] as String? ?? existing?['created_at'] as String? ?? '',
+        );
+
+        if (existing == null ||
+            (remoteUpdatedAt != null && localUpdatedAt != null && remoteUpdatedAt.isAfter(localUpdatedAt))) {
+          if (existing != null) {
+            await _clinicSettingsRepo.update(Helpers.toInt(existing['id']), map);
+          } else {
+            await _clinicSettingsRepo.insert(map);
+          }
+          debugPrint('CLOUD DOWNLOAD: pulled clinic settings');
+        }
+      } catch (e) {
+        debugPrint('CLOUD DOWNLOAD: clinic settings error: $e');
+      }
+    }
+
+    // Apply medicines (upsert by name)
+    for (final json in remoteMedicines) {
+      try {
+        final map = Map<String, dynamic>.from(json as Map);
+        final name = map['name']?.toString() ?? '';
+        if (name.isEmpty) continue;
+
+        final existing = await _medicinesRepo.getByName(name);
+        if (existing == null) {
+          await _medicinesRepo.insert({'name': name});
+          debugPrint('CLOUD DOWNLOAD: pulled medicine $name');
+        }
+      } catch (e) {
+        debugPrint('CLOUD DOWNLOAD: medicine error: $e');
+      }
+    }
+
+    // Apply symptoms (upsert by name)
+    for (final json in remoteSymptoms) {
+      try {
+        final map = Map<String, dynamic>.from(json as Map);
+        final name = map['name']?.toString() ?? '';
+        if (name.isEmpty) continue;
+
+        final existing = await _symptomsRepo.getByName(name);
+        if (existing == null) {
+          await _symptomsRepo.insert({'name': name});
+          debugPrint('CLOUD DOWNLOAD: pulled symptom $name');
+        }
+      } catch (e) {
+        debugPrint('CLOUD DOWNLOAD: symptom error: $e');
+      }
+    }
+
     // Apply deleted entities
     for (final del in remoteDeleted) {
       try {
@@ -509,10 +514,10 @@ class CloudSyncManager extends ChangeNotifier {
         if (etype == 'patients' || etype == 'patient') {
           final local = await _patientRepo.getBySyncId(eid);
           if (local != null) {
-            final localId = local['id'] as int;
+            final localId = Helpers.toInt(local['id']);
             final patientOpds = await _opdRepo.getByPatientId(localId);
             for (final opd in patientOpds) {
-              final opdSqlId = opd['id'] as int;
+              final opdSqlId = Helpers.toInt(opd['id']);
               await _imagesRepo.deleteByOpdVisitId(opdSqlId);
             }
             await _opdRepo.deleteByPatientId(localId);
@@ -521,7 +526,7 @@ class CloudSyncManager extends ChangeNotifier {
         } else if (etype == 'opd_visits' || etype == 'opd_visit') {
           final local = await _opdRepo.getByOpdId(eid);
           if (local != null) {
-            final localId = local['id'] as int;
+            final localId = Helpers.toInt(local['id']);
             await _imagesRepo.deleteByOpdVisitId(localId);
             // Remove associated follow-up appointment from Hive
             final nextVisit = local['next_visit_date']?.toString() ?? '';
@@ -562,14 +567,7 @@ class CloudSyncManager extends ChangeNotifier {
     debugPrint('CLOUD DOWNLOAD: completed, last_sync=$serverTime');
   }
 
-  /// Ensure a valid API token exists for cloud API calls.
-  Future<void> _ensureToken() async {
-    try {
-      await ApiService.ensureToken();
-    } catch (e) {
-      debugPrint('CLOUD SYNC: token check failed: $e');
-    }
-  }
+
 
   /// Register this device with the cloud server.
   Future<void> _registerDevice() async {
@@ -598,16 +596,13 @@ class CloudSyncManager extends ChangeNotifier {
   // ─── Helpers ──────────────────────────────────────
 
   Future<String> _loadOrCreateDeviceId() async {
-    final existing = await _deviceRegRepo.get();
-    if (existing != null) {
-      return existing['device_id'] as String;
+    final prefs = await SharedPreferences.getInstance();
+    final existing = prefs.getString('device_id');
+    if (existing != null && existing.isNotEmpty) {
+      return existing;
     }
     final newId = _generateDeviceId();
-    await _deviceRegRepo.insert({
-      'device_id': newId,
-      'device_name': '',
-      'clinic_id': '',
-    });
+    await prefs.setString('device_id', newId);
     return newId;
   }
 
@@ -643,12 +638,13 @@ class CloudSyncManager extends ChangeNotifier {
     final syncId = row['sync_id'] as String? ?? 'P${row['id']}';
     return {
       'id': syncId,
-      'name': row['full_name'],
+      'full_name': row['full_name'],
       'dob': row['dob'] ?? '',
       'age': row['age'] ?? 0,
       'gender': row['gender'] ?? 'Not Specified',
       'blood_group': row['blood_group'] ?? 'Not Specified',
-      'mobile': row['mobile_number'],
+      'mobile_number': row['mobile_number'],
+      'alternate_mobile': row['alternate_mobile'],
       'address': row['address'] ?? '',
       'created_at': createdDt.toIso8601String(),
       'updated_at': _resolveUpdatedAt(row),
@@ -660,7 +656,7 @@ class CloudSyncManager extends ChangeNotifier {
     final createdAt = row['created_at'] as String? ?? '';
     final createdDt = DateTime.tryParse(createdAt) ?? DateTime.now();
     final visitDt = row['visit_datetime'] as String? ?? '';
-    final localPatientId = row['patient_id'] as int? ?? 0;
+    final localPatientId = Helpers.toInt(row['patient_id']);
     String patientSyncId;
     String patientBloodGroup = '';
     try {
@@ -675,24 +671,24 @@ class CloudSyncManager extends ChangeNotifier {
     return {
       'id': row['opd_id']?.toString() ?? 'R${row['id']}',
       'patient_id': patientSyncId,
-      'type': row['opd_type'] ?? 'consultation',
+      'opd_type': row['opd_type'] ?? 'consultation',
       'symptoms': row['symptoms'] ?? '',
       'diagnosis': row['diagnosis'] ?? '',
       'medicines': row['medicines'] ?? '',
-      'visit_date': DateTime.tryParse(visitDt)?.toIso8601String() ?? createdDt.toIso8601String(),
+      'visit_datetime': DateTime.tryParse(visitDt)?.toIso8601String() ?? createdDt.toIso8601String(),
       'clinical_notes': row['clinical_notes'] ?? '',
       'panchakarma_notes': pkNotes,
-      'consultation_fee': (row['consultation_fee'] as num?)?.toString() ?? '',
-      'medicine_fee': (row['medicine_fee'] as num?)?.toString() ?? '',
-      'panchakarma_fee': (row['panchakarma_fee'] as num?)?.toString() ?? '',
-      'total_fee': (row['total_fee'] as num?)?.toString() ?? '',
-      'discount': (row['discount_value'] as num?)?.toString() ?? '',
+      'consultation_fee': row['consultation_fee']?.toString() ?? '',
+      'medicine_fee': row['medicine_fee']?.toString() ?? '',
+      'panchakarma_fee': row['panchakarma_fee']?.toString() ?? '',
+      'total_fee': row['total_fee']?.toString() ?? '',
+      'discount_value': row['discount_value']?.toString() ?? '',
       'discount_type': row['discount_type'] ?? '',
       'payment_mode': row['payment_mode'] ?? '',
       'charge_type': row['charge_type'] ?? '',
       'previous_visit_date': '',
-      'follow_up_reason': row['followup_status'] ?? '',
-      'next_visit': row['next_visit_date'] ?? '',
+      'followup_status': row['followup_status'] ?? '',
+      'next_visit_date': row['next_visit_date'] ?? '',
       'blood_group': patientBloodGroup,
       'created_at': createdDt.toIso8601String(),
       'updated_at': _resolveUpdatedAt(row),
@@ -704,9 +700,9 @@ class CloudSyncManager extends ChangeNotifier {
     return {
       'id': sqliteId,
       'sync_id': syncId,
-      'full_name': remote['name']?.toString() ?? '',
-      'mobile_number': remote['mobile']?.toString() ?? '',
-      'alternate_mobile': null,
+      'full_name': remote['full_name']?.toString() ?? '',
+      'mobile_number': remote['mobile_number']?.toString() ?? '',
+      'alternate_mobile': remote['alternate_mobile']?.toString(),
       'gender': remote['gender']?.toString() ?? 'Not Specified',
       'dob': remote['dob']?.toString() ?? '',
       'age': int.tryParse(remote['age']?.toString() ?? '') ?? 0,
@@ -722,7 +718,7 @@ class CloudSyncManager extends ChangeNotifier {
     int localPatientId;
     try {
       final patient = await _patientRepo.getBySyncId(remotePatientId);
-      localPatientId = patient?['id'] as int? ?? 0;
+      localPatientId = Helpers.toInt(patient?['id']);
     } catch (_) {
       localPatientId = 0;
     }
@@ -730,8 +726,8 @@ class CloudSyncManager extends ChangeNotifier {
       'id': sqliteId,
       'opd_id': remote['id']?.toString() ?? '',
       'patient_id': localPatientId,
-      'visit_datetime': remote['visit_date']?.toString() ?? '',
-      'opd_type': remote['type']?.toString() ?? 'consultation',
+      'visit_datetime': remote['visit_datetime']?.toString() ?? '',
+      'opd_type': remote['opd_type']?.toString() ?? 'consultation',
       'charge_type': remote['charge_type']?.toString() ?? '',
       'diagnosis': remote['diagnosis']?.toString() ?? '',
       'symptoms': remote['symptoms']?.toString() ?? '',
@@ -740,9 +736,9 @@ class CloudSyncManager extends ChangeNotifier {
       'consultation_fee': double.tryParse(remote['consultation_fee']?.toString() ?? '') ?? 0.0,
       'medicine_fee': double.tryParse(remote['medicine_fee']?.toString() ?? '') ?? 0.0,
       'payment_mode': remote['payment_mode']?.toString() ?? '',
-      'next_visit_date': remote['next_visit']?.toString() ?? '',
-      'followup_status': remote['follow_up_reason']?.toString() ?? '',
-      'discount_value': double.tryParse(remote['discount']?.toString() ?? '') ?? 0.0,
+      'next_visit_date': remote['next_visit_date']?.toString() ?? '',
+      'followup_status': remote['followup_status']?.toString() ?? '',
+      'discount_value': double.tryParse(remote['discount_value']?.toString() ?? '') ?? 0.0,
       'created_at': remote['created_at']?.toString() ?? DateTime.now().toIso8601String(),
       'updated_at': remote['updated_at']?.toString() ?? DateTime.now().toIso8601String(),
       'medicines': remote['medicines']?.toString() ?? '',

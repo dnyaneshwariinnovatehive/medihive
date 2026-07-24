@@ -1,5 +1,21 @@
 from database import get_db
 from datetime import datetime
+from services.log_service import get_logger
+
+logger = get_logger(__name__)
+
+
+def parse_patient_id(pid):
+    if pid is None:
+        return None
+    if isinstance(pid, int):
+        return pid
+    if isinstance(pid, str):
+        # Remove any leading non-digits (like 'P' or 'P0')
+        digits = ''.join(c for c in pid if c.isdigit())
+        if digits:
+            return int(digits)
+    return None
 
 
 class Patient:
@@ -9,51 +25,86 @@ class Patient:
     def dict_from_row(row):
         if row is None:
             return None
-        return dict(row)
+        d = dict(row)
+        if 'id' in d:
+            d['db_id'] = d['id']
+            if isinstance(d['id'], int):
+                d['id'] = f"P{d['id']:03d}"
+        return d
 
     @staticmethod
     def all():
         db = get_db()
-        rows = db.execute("SELECT * FROM patients ORDER BY updated_at DESC").fetchall()
-        db.close()
-        return [Patient.dict_from_row(r) for r in rows]
+        try:
+            rows = db.execute("SELECT * FROM patients ORDER BY created_at DESC").fetchall()
+            return [Patient.dict_from_row(r) for r in rows]
+        finally:
+            db.close()
 
     @staticmethod
     def get(patient_id):
+        pid = parse_patient_id(patient_id)
+        if pid is None:
+            return None
         db = get_db()
-        row = db.execute("SELECT * FROM patients WHERE id = %s", (patient_id,)).fetchone()
-        db.close()
-        return Patient.dict_from_row(row)
+        try:
+            row = db.execute("SELECT * FROM patients WHERE id = %s", (str(pid),)).fetchone()
+            return Patient.dict_from_row(row)
+        finally:
+            db.close()
 
     @staticmethod
     def create(data):
+        pid = parse_patient_id(data['id'])
         now = datetime.utcnow().isoformat()
         db = get_db()
-        db.execute("""
-            INSERT INTO patients (id, name, dob, age, gender, blood_group, mobile, address,
-                                  last_diagnosis, last_visit_date, created_at, updated_at,
-                                  is_synced, user_id, clinic_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s)
-        """, (
-            data['id'], data['name'], data.get('dob', ''),
-            data.get('age', 0), data.get('gender', 'Not Specified'),
-            data.get('blood_group', 'Not Specified'),
-            data.get('mobile', ''), data.get('address', ''),
-            data.get('last_diagnosis', ''), data.get('last_visit_date', ''),
-            now, now,
-            data.get('user_id', ''),
-            data.get('clinic_id', '')
-        ))
-        db.commit()
-        db.close()
-        return Patient.get(data['id'])
+        try:
+            try:
+                db.execute("""
+                    INSERT INTO patients (id, full_name, dob, age, gender, blood_group, mobile_number, alternate_mobile, address,
+                                          created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    str(pid), data['full_name'], data.get('dob', ''),
+                    data.get('age', 0), data.get('gender', 'Not Specified'),
+                    data.get('blood_group', 'Not Specified'),
+                    data.get('mobile_number', ''), data.get('alternate_mobile', ''),
+                    data.get('address', ''),
+                    now
+                ))
+                db.commit()
+                return Patient.get(pid)
+            except Exception as e:
+                db.rollback()
+                logger.warning("Patient create with explicit id=%s failed (%s), retrying with auto-generated id", pid, e)
+                db.execute("""
+                    INSERT INTO patients (full_name, dob, age, gender, blood_group, mobile_number, alternate_mobile, address,
+                                          created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    data['full_name'], data.get('dob', ''),
+                    data.get('age', 0), data.get('gender', 'Not Specified'),
+                    data.get('blood_group', 'Not Specified'),
+                    data.get('mobile_number', ''), data.get('alternate_mobile', ''),
+                    data.get('address', ''),
+                    now
+                ))
+                db.commit()
+                row = db.execute(
+                    "SELECT * FROM patients WHERE full_name = %s AND created_at = %s ORDER BY id DESC LIMIT 1",
+                    (data['full_name'], now)
+                ).fetchone()
+                return Patient.dict_from_row(row) if row else None
+        finally:
+            db.close()
 
     @staticmethod
     def update(patient_id, data):
-        now = datetime.utcnow().isoformat()
-        allowed = ('name', 'dob', 'age', 'gender', 'blood_group', 'mobile',
-                   'address', 'last_diagnosis', 'last_visit_date', 'user_id',
-                   'clinic_id')
+        pid = parse_patient_id(patient_id)
+        if pid is None:
+            return None
+        allowed = ('full_name', 'dob', 'age', 'gender', 'blood_group', 'mobile_number',
+                   'alternate_mobile', 'address')
         fields = []
         values = []
         for k in allowed:
@@ -61,25 +112,35 @@ class Patient:
                 fields.append(f"{k} = %s")
                 values.append(data[k])
         if not fields:
-            return Patient.get(patient_id)
-        fields.append("updated_at = %s")
-        values.append(now)
-        values.append(patient_id)
+            return Patient.get(pid)
+        now = datetime.utcnow().isoformat()
+        values.append(str(pid))
         db = get_db()
-        db.execute(f"UPDATE patients SET {', '.join(fields)} WHERE id = %s", values)
-        db.commit()
-        db.close()
-        return Patient.get(patient_id)
+        try:
+            db.execute(f"UPDATE patients SET {', '.join(fields)} WHERE id = %s", values)
+            db.commit()
+            return Patient.get(pid)
+        finally:
+            db.close()
 
     @staticmethod
     def assign_next_id():
         """Generate the next sequential patient ID (e.g., P001, P002, ...)."""
         db = get_db()
         try:
-            result = db.execute(
-                "SELECT COALESCE(MAX(CAST(SUBSTR(TRIM(id), 2) AS INTEGER)), 0) + 1 AS nid "
-                "FROM patients WHERE id LIKE 'P%'"
-            ).fetchone()
+            result = db.execute("""
+                SELECT COALESCE(
+                    MAX(
+                        CASE 
+                            WHEN regexp_replace(id::text, '[^0-9]', '', 'g') ~ '^[0-9]+$' 
+                            THEN CAST(regexp_replace(id::text, '[^0-9]', '', 'g') AS INTEGER) 
+                            ELSE 0 
+                        END
+                    ), 
+                    0
+                ) + 1 AS nid 
+                FROM patients
+            """).fetchone()
             next_num = result['nid']
             return f'P{next_num:03d}'
         finally:
@@ -87,55 +148,74 @@ class Patient:
 
     @staticmethod
     def delete(patient_id):
-        from models.deleted_entity import DeletedEntity
+        pid = parse_patient_id(patient_id)
+        if pid is None:
+            return
         from models.opd_record import OPDRecord
         db = get_db()
-        opd_rows = db.execute(
-            "SELECT id FROM opd_records WHERE patient_id = %s", (patient_id,)
-        ).fetchall()
-        db.close()
+        try:
+            opd_rows = db.execute(
+                "SELECT id FROM opd_visits WHERE patient_id = %s", (str(pid),)
+            ).fetchall()
+        finally:
+            db.close()
+
         for row in opd_rows:
             OPDRecord.delete(row['id'])
-        DeletedEntity.record('patient', patient_id)
+
         db = get_db()
-        db.execute("DELETE FROM patients WHERE id = %s", (patient_id,))
-        db.commit()
-        db.close()
+        try:
+            db.execute("DELETE FROM patients WHERE id = %s", (str(pid),))
+            db.commit()
+        finally:
+            db.close()
 
     @staticmethod
     def upsert(data):
         existing = Patient.get(data['id'])
         if existing:
             return Patient.update(data['id'], data)
-        return Patient.create(data)
+        # Also try to find by name+mobile to avoid duplicate patients
+        row = None
+        db = get_db()
+        try:
+            row = db.execute(
+                "SELECT * FROM patients WHERE full_name = %s AND mobile_number = %s LIMIT 1",
+                (data.get('full_name', ''), data.get('mobile_number', ''))
+            ).fetchone()
+        except Exception as e:
+            logger.warning("Patient upsert name+mobile lookup failed: %s", e)
+        finally:
+            db.close()
+
+        if row:
+            existing = Patient.dict_from_row(row)
+            logger.info("Patient upsert: found existing patient by name+mobile, id=%s", existing['id'])
+            return Patient.update(existing['id'], data)
+
+        created = Patient.create(data)
+        if created is not None:
+            return created
+
+        # create() returned None — do a final name+mobile lookup as fallback
+        db = get_db()
+        try:
+            row = db.execute(
+                "SELECT * FROM patients WHERE full_name = %s AND mobile_number = %s LIMIT 1",
+                (data.get('full_name', ''), data.get('mobile_number', ''))
+            ).fetchone()
+            return Patient.dict_from_row(row) if row else None
+        finally:
+            db.close()
 
     @staticmethod
-    def by_clinic(clinic_id):
+    def updated_since(timestamp):
         db = get_db()
-        rows = db.execute(
-            "SELECT * FROM patients WHERE clinic_id = %s ORDER BY updated_at DESC",
-            (clinic_id,)
-        ).fetchall()
-        db.close()
-        return [Patient.dict_from_row(r) for r in rows]
-
-    @staticmethod
-    def updated_since(timestamp, user_id=None, clinic_id=None):
-        db = get_db()
-        if clinic_id:
+        try:
             rows = db.execute(
-                "SELECT * FROM patients WHERE updated_at > %s AND clinic_id = %s ORDER BY updated_at",
-                (timestamp, clinic_id)
-            ).fetchall()
-        elif user_id:
-            rows = db.execute(
-                "SELECT * FROM patients WHERE updated_at > %s AND (user_id = %s OR user_id = '') ORDER BY updated_at",
-                (timestamp, user_id)
-            ).fetchall()
-        else:
-            rows = db.execute(
-                "SELECT * FROM patients WHERE updated_at > %s ORDER BY updated_at",
+                "SELECT * FROM patients WHERE created_at > %s ORDER BY created_at",
                 (timestamp,)
             ).fetchall()
-        db.close()
-        return [Patient.dict_from_row(r) for r in rows]
+            return [Patient.dict_from_row(r) for r in rows]
+        finally:
+            db.close()

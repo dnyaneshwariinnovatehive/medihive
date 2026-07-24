@@ -22,11 +22,13 @@ class Prescription {
   final String panchakarmaNotes;
   final String nextVisit;
   final String doctorName;
+  final String doctorQualification;
   final String clinicName;
   final String clinicAddress;
   final String clinicPhone;
   final String licenseNo;
   final String patientMobile;
+  final String clinicLogoPath;
 
   const Prescription({
     required this.date,
@@ -40,10 +42,12 @@ class Prescription {
     this.panchakarmaNotes = '',
     required this.nextVisit,
     required this.doctorName,
+    this.doctorQualification = '',
     required this.clinicName,
     required this.clinicAddress,
     required this.clinicPhone,
     required this.licenseNo,
     this.patientMobile = '',
+    this.clinicLogoPath = '',
   });
 }

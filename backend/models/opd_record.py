@@ -1,79 +1,120 @@
 from database import get_db
 from datetime import datetime
+from models.patient import parse_patient_id
+from services.log_service import get_logger
+
+logger = get_logger(__name__)
 
 
 class OPDRecord:
-    TABLE = 'opd_records'
+    TABLE = 'opd_visits'
 
     @staticmethod
     def dict_from_row(row):
         if row is None:
             return None
-        return dict(row)
+        d = dict(row)
+        d['db_id'] = row['id']
+        if 'opd_id' in d:
+            d['id'] = d['opd_id']
+        if 'patient_id' in d and isinstance(d['patient_id'], int):
+            d['patient_id'] = f"P{d['patient_id']:03d}"
+        return d
 
     @staticmethod
     def all(patient_id=None):
         db = get_db()
-        if patient_id:
-            rows = db.execute(
-                "SELECT * FROM opd_records WHERE patient_id = %s ORDER BY visit_date DESC",
-                (patient_id,)
-            ).fetchall()
-        else:
-            rows = db.execute("SELECT * FROM opd_records ORDER BY visit_date DESC").fetchall()
-        db.close()
-        return [OPDRecord.dict_from_row(r) for r in rows]
+        pid = parse_patient_id(patient_id)
+        try:
+            if pid:
+                rows = db.execute(
+                    "SELECT * FROM opd_visits WHERE patient_id = %s ORDER BY visit_datetime DESC",
+                    (str(pid),)
+                ).fetchall()
+            else:
+                rows = db.execute("SELECT * FROM opd_visits ORDER BY visit_datetime DESC").fetchall()
+            return [OPDRecord.dict_from_row(r) for r in rows]
+        finally:
+            db.close()
 
     @staticmethod
     def get(record_id):
         db = get_db()
-        row = db.execute("SELECT * FROM opd_records WHERE id = %s", (record_id,)).fetchone()
-        db.close()
-        return OPDRecord.dict_from_row(row)
+        try:
+            if isinstance(record_id, int) or (isinstance(record_id, str) and record_id.isdigit()):
+                row = db.execute("SELECT * FROM opd_visits WHERE id = %s", (str(record_id),)).fetchone()
+            else:
+                row = db.execute("SELECT * FROM opd_visits WHERE opd_id = %s", (str(record_id),)).fetchone()
+            return OPDRecord.dict_from_row(row)
+        finally:
+            db.close()
+
+    @staticmethod
+    def get_by_opd_id(opd_id):
+        return OPDRecord.get(opd_id)
+
+    @staticmethod
+    def _next_id():
+        db = get_db()
+        try:
+            row = db.execute("""
+                SELECT COALESCE(
+                    MAX(CASE WHEN id::text ~ '^[0-9]+$' THEN CAST(id::text AS INTEGER) ELSE 0 END),
+                    0
+                ) + 1 AS nid FROM opd_visits
+            """).fetchone()
+            return row['nid']
+        finally:
+            db.close()
 
     @staticmethod
     def create(data):
+        pid = parse_patient_id(data['patient_id'])
         now = datetime.utcnow().isoformat()
+        new_id = OPDRecord._next_id()
         db = get_db()
-        db.execute("""
-            INSERT INTO opd_records (id, patient_id, type, symptoms, diagnosis, medicines,
-                visit_date, clinical_notes, consultation_fee, medicine_fee, panchakarma_fee,
-                total_fee, discount, discount_type, payment_mode, charge_type,
-                previous_visit_date, follow_up_reason,
-                next_visit, blood_group, image_links, panchakarma_notes, created_at, updated_at,
-                is_synced, user_id, clinic_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s)
-        """, (
-            data['id'], data['patient_id'], data.get('type', 'consultation'),
-            data.get('symptoms', ''), data.get('diagnosis', ''),
-            data.get('medicines', ''), data.get('visit_date', now),
-            data.get('clinical_notes', ''), data.get('consultation_fee', '0'),
-            data.get('medicine_fee', '0'), data.get('panchakarma_fee', '0'),
-            data.get('total_fee', '0'), data.get('discount', '0'),
-            data.get('discount_type', 'None'),
-            data.get('payment_mode', ''), data.get('charge_type', ''),
-            data.get('previous_visit_date', ''), data.get('follow_up_reason', ''),
-            data.get('next_visit', ''), data.get('blood_group', ''),
-            data.get('image_links', ''),
-            data.get('panchakarma_notes', ''),
-            now, now,
-            data.get('user_id', ''),
-            data.get('clinic_id', '')
-        ))
-        db.commit()
-        db.close()
-        return OPDRecord.get(data['id'])
+        try:
+            try:
+                db.execute("""
+                    INSERT INTO opd_visits (id, opd_id, patient_id, opd_type, symptoms, diagnosis, medicines,
+                        visit_datetime, clinical_notes, consultation_fee, medicine_fee, panchakarma_fee,
+                        total_fee, discount_value, discount_type, payment_mode, charge_type,
+                        followup_status, next_visit_date, panchakarma_notes, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    new_id, data['id'], str(pid) if pid else None, data.get('opd_type', 'consultation'),
+                    data.get('symptoms', ''), data.get('diagnosis', ''),
+                    data.get('medicines', ''), data.get('visit_datetime', now),
+                    data.get('clinical_notes', ''), data.get('consultation_fee', '0'),
+                    data.get('medicine_fee', '0'), data.get('panchakarma_fee', '0'),
+                    data.get('total_fee', '0'), data.get('discount_value', '0'),
+                    data.get('discount_type', 'None'),
+                    data.get('payment_mode', ''), data.get('charge_type', ''),
+                    data.get('followup_status', ''),
+                    data.get('next_visit_date', ''),
+                    data.get('panchakarma_notes', ''),
+                    now
+                ))
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                logger.warning("OPD create failed for opd_id=%s (%s), falling back to update", data['id'], e)
+                try:
+                    OPDRecord.update(data['id'], data)
+                except Exception as e2:
+                    logger.error("OPD fallback update also failed for opd_id=%s: %s", data['id'], e2)
+        finally:
+            db.close()
+        return OPDRecord.get_by_opd_id(data['id'])
 
     @staticmethod
     def update(record_id, data):
-        now = datetime.utcnow().isoformat()
-        allowed = ('type', 'symptoms', 'diagnosis', 'medicines', 'visit_date',
+        allowed = ('opd_type', 'symptoms', 'diagnosis', 'medicines', 'visit_datetime',
                    'clinical_notes', 'consultation_fee', 'medicine_fee',
-                   'panchakarma_fee', 'total_fee', 'discount', 'discount_type',
-                   'payment_mode', 'charge_type', 'previous_visit_date',
-                   'follow_up_reason', 'next_visit', 'blood_group',
-                   'image_links', 'user_id', 'clinic_id',
-                   'panchakarma_notes')
+                   'panchakarma_fee', 'total_fee', 'discount_value', 'discount_type',
+                   'payment_mode', 'charge_type',
+                   'followup_status', 'next_visit_date',
+                   'panchakarma_notes', 'opd_id')
         fields = []
         values = []
         for k in allowed:
@@ -82,69 +123,62 @@ class OPDRecord:
                 values.append(data[k])
         if not fields:
             return OPDRecord.get(record_id)
-        fields.append("updated_at = %s")
-        values.append(now)
-        values.append(record_id)
+        now = datetime.utcnow().isoformat()
+
+        if isinstance(record_id, int) or (isinstance(record_id, str) and record_id.isdigit()):
+            where_clause = "WHERE id = %s"
+            where_val = str(record_id)
+        else:
+            where_clause = "WHERE opd_id = %s"
+            where_val = str(record_id)
+
+        values.append(where_val)
         db = get_db()
-        db.execute(f"UPDATE opd_records SET {', '.join(fields)} WHERE id = %s", values)
-        db.commit()
-        db.close()
+        try:
+            db.execute(f"UPDATE opd_visits SET {', '.join(fields)} {where_clause}", values)
+            db.commit()
+        finally:
+            db.close()
         return OPDRecord.get(record_id)
 
     @staticmethod
     def delete(record_id):
-        from models.deleted_entity import DeletedEntity
-        DeletedEntity.record('opd_visit', record_id)
         db = get_db()
-        db.execute("DELETE FROM opd_records WHERE id = %s", (record_id,))
-        db.commit()
-        db.close()
+        try:
+            if isinstance(record_id, int) or (isinstance(record_id, str) and record_id.isdigit()):
+                db.execute("DELETE FROM opd_visits WHERE id = %s", (str(record_id),))
+            else:
+                db.execute("DELETE FROM opd_visits WHERE opd_id = %s", (str(record_id),))
+            db.commit()
+        finally:
+            db.close()
 
     @staticmethod
     def upsert(data):
-        existing = OPDRecord.get(data['id'])
+        try:
+            existing = OPDRecord.get(data['id'])
+        except Exception as e:
+            logger.warning("OPD upsert get failed for id=%s: %s", data['id'], e)
+            existing = None
         if existing:
-            return OPDRecord.update(data['id'], data)
-        return OPDRecord.create(data)
+            try:
+                return OPDRecord.update(data['id'], data)
+            except Exception as e:
+                logger.warning("OPD upsert update failed for id=%s: %s, falling back to create", data['id'], e)
+        try:
+            return OPDRecord.create(data)
+        except Exception as e:
+            logger.error("OPD upsert create failed for id=%s: %s", data['id'], e)
+            raise
 
     @staticmethod
-    def set_image_links(record_id, links_text):
-        now = datetime.utcnow().isoformat()
+    def updated_since(timestamp):
         db = get_db()
-        db.execute(
-            "UPDATE opd_records SET image_links = %s, updated_at = %s WHERE id = %s",
-            (links_text, now, record_id)
-        )
-        db.commit()
-        db.close()
-
-    @staticmethod
-    def by_clinic(clinic_id):
-        db = get_db()
-        rows = db.execute(
-            "SELECT * FROM opd_records WHERE clinic_id = %s ORDER BY updated_at DESC",
-            (clinic_id,)
-        ).fetchall()
-        db.close()
-        return [OPDRecord.dict_from_row(r) for r in rows]
-
-    @staticmethod
-    def updated_since(timestamp, user_id=None, clinic_id=None):
-        db = get_db()
-        if clinic_id:
+        try:
             rows = db.execute(
-                "SELECT * FROM opd_records WHERE updated_at > %s AND clinic_id = %s ORDER BY updated_at",
-                (timestamp, clinic_id)
-            ).fetchall()
-        elif user_id:
-            rows = db.execute(
-                "SELECT * FROM opd_records WHERE updated_at > %s AND (user_id = %s OR user_id = '') ORDER BY updated_at",
-                (timestamp, user_id)
-            ).fetchall()
-        else:
-            rows = db.execute(
-                "SELECT * FROM opd_records WHERE updated_at > %s ORDER BY updated_at",
+                "SELECT * FROM opd_visits WHERE created_at > %s ORDER BY created_at",
                 (timestamp,)
             ).fetchall()
-        db.close()
-        return [OPDRecord.dict_from_row(r) for r in rows]
+            return [OPDRecord.dict_from_row(r) for r in rows]
+        finally:
+            db.close()

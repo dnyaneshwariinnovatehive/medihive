@@ -433,8 +433,10 @@ class _BackupScreenState extends State<BackupScreen> {
                                         await file.writeAsBytes(bytes);
                                         _showToast('✓ Backup saved locally: $fileName');
 
+                                        if (!context.mounted) return;
                                         final syncMgr = context.read<SyncManager>();
                                         if (syncMgr.syncState != SyncState.offline) {
+                                          if (!context.mounted) return;
                                           final upload = await showDialog<bool>(
                                             context: context,
                                             builder: (ctx) => AlertDialog(

@@ -8,6 +8,7 @@ import '../../providers/settings_provider.dart';
 import '../../repositories/opd_record_repository.dart';
 import '../../repositories/patient_repository.dart';
 import '../../widgets/pressable_card.dart';
+import '../../utils/helpers.dart';
 import '../../widgets/standard_header.dart';
 
 class OpdQueueScreen extends StatefulWidget {
@@ -37,7 +38,7 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
       final patientRepo = PatientRepository();
       final allPatients = await patientRepo.getAll();
       _patientMap = {
-        for (final p in allPatients) (p['id'] as int): p,
+        for (final p in allPatients) Helpers.toInt(p['id']): p,
       };
       _records = await opdRepo.getByDate(_selectedDate);
     } catch (_) {
@@ -289,7 +290,7 @@ class _OpdQueueScreenState extends State<OpdQueueScreen> {
                         itemCount: records.length,
                         itemBuilder: (context, index) {
                           final record = records[index];
-                          final patient = _patientMap[record['patient_id'] as int];
+                          final patient = _patientMap[Helpers.toInt(record['patient_id'])];
                           final patientName = patient?['full_name'] as String?;
                           final patientAge = patient?['age'] as int? ?? 0;
                           final patientGender = patient?['gender'] as String?;

@@ -1,4 +1,12 @@
 class Helpers {
+  /// Safely convert a dynamic value (String or int) to int.
+  /// Handles old SQLite databases where INTEGER columns were stored as TEXT.
+  static int toInt(dynamic value, [int defaultValue = 0]) {
+    if (value is int) return value;
+    if (value is String) return int.tryParse(value) ?? defaultValue;
+    return defaultValue;
+  }
+
   /// Calculate age from date of birth string (YYYY-MM-DD)
   static int calculateAge(String dobString) {
     final dob = DateTime.tryParse(dobString);

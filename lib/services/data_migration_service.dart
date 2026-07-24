@@ -9,6 +9,7 @@ import '../models/patient_model.dart';
 import '../models/opd_record_model.dart';
 import '../database/database_helper.dart';
 import '../database/schema.dart';
+import '../utils/helpers.dart';
 
 class MigrationResult {
   final int patientsHive;
@@ -414,7 +415,7 @@ class DataMigrationService {
       whereArgs: [opdVisitId],
     );
     if (rows.isNotEmpty) {
-      return rows.first['patient_id'] as int;
+      return Helpers.toInt(rows.first['patient_id']);
     }
     _logError('Could not resolve patient_id for OPD visit ID $hiveOpdId (SQLite: $opdVisitId)');
     return 0;

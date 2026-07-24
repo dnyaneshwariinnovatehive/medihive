@@ -8,10 +8,10 @@ import '../../providers/patient_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../models/patient.dart';
 import '../../repositories/opd_record_repository.dart';
-import '../../database/database_helper.dart';
-import '../../database/schema.dart';
+import '../../repositories/patient_repository.dart';
 import '../../widgets/animated_list_item.dart';
 import '../../widgets/pressable_card.dart';
+import '../../utils/helpers.dart';
 import '../../widgets/standard_header.dart';
 
 class PatientManagementScreen extends StatefulWidget {
@@ -27,13 +27,20 @@ class _PatientManagementScreenState extends State<PatientManagementScreen> {
   bool _showFab = true;
   DateTime _selectedDate = DateTime.now();
   Set<String> _datePatientIds = {};
-  int _lastPatientCount = -1;
+
+  void _onPatientProviderChanged() {
+    if (mounted) {
+      _loadDateRecords();
+    }
+  }
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<PatientProvider>().loadPatients();
+      final provider = context.read<PatientProvider>();
+      provider.loadPatients();
+      provider.addListener(_onPatientProviderChanged);
       _loadDateRecords();
     });
     _scrollController.addListener(() {
@@ -48,6 +55,9 @@ class _PatientManagementScreenState extends State<PatientManagementScreen> {
 
   @override
   void dispose() {
+    try {
+      context.read<PatientProvider>().removeListener(_onPatientProviderChanged);
+    } catch (_) {}
     _scrollController.dispose();
     super.dispose();
   }
@@ -86,18 +96,21 @@ class _PatientManagementScreenState extends State<PatientManagementScreen> {
       if (rows.isEmpty) {
         _datePatientIds = {};
       } else {
-        final patientIds = rows.map((r) => r['patient_id'] as int).toSet().toList();
-        final db = await DatabaseHelper().database;
-        final placeholders = patientIds.map((_) => '?').join(',');
-        final patientRows = await db.query(
-          tablePatients,
-          columns: ['sync_id', 'id'],
-          where: 'id IN ($placeholders)',
-          whereArgs: patientIds,
+        final patientIds = rows
+            .map((r) => Helpers.toInt(r['patient_id']))
+            .toSet()
+            .toList();
+        final patientRepo = PatientRepository();
+        final patientRows = await Future.wait(
+          patientIds.map(patientRepo.getById),
         );
         _datePatientIds = patientRows
-            .map<String>((r) => (r['sync_id'] as String?) ??
-                'P${(r['id'] as int).toString().padLeft(3, '0')}')
+            .whereType<Map<String, dynamic>>()
+            .map<String>(
+              (r) =>
+                  r['sync_id']?.toString() ??
+                  'P${Helpers.toInt(r['id']).toString().padLeft(3, '0')}',
+            )
             .where((id) => id.isNotEmpty)
             .toSet();
       }
@@ -135,13 +148,10 @@ class _PatientManagementScreenState extends State<PatientManagementScreen> {
   Widget build(BuildContext context) {
     context.watch<SettingsProvider>();
     final provider = context.watch<PatientProvider>();
-    final count = provider.filteredPatients.length;
-    if (count != _lastPatientCount) {
-      _lastPatientCount = count;
-      WidgetsBinding.instance.addPostFrameCallback((_) => _loadDateRecords());
-    }
     final allPatients = provider.filteredPatients;
-    final dateFilteredPatients = allPatients.where((p) => _datePatientIds.contains(p.id)).toList();
+    final dateFilteredPatients = allPatients
+        .where((p) => _datePatientIds.contains(p.id))
+        .toList();
 
     return Scaffold(
       backgroundColor: AppTheme.background,
@@ -160,10 +170,7 @@ class _PatientManagementScreenState extends State<PatientManagementScreen> {
               padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
               child: Text(
                 '${dateFilteredPatients.length} Patient${dateFilteredPatients.length == 1 ? '' : 's'}',
-                style: TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 13,
-                ),
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
               ),
             ),
           ),
@@ -208,7 +215,9 @@ class _PatientManagementScreenState extends State<PatientManagementScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              DateFormat('EEEE, d MMMM yyyy').format(_selectedDate),
+                              DateFormat(
+                                'EEEE, d MMMM yyyy',
+                              ).format(_selectedDate),
                               style: AppTheme.body.copyWith(
                                 fontWeight: FontWeight.bold,
                                 color: AppTheme.textPrimary,
@@ -266,7 +275,9 @@ class _PatientManagementScreenState extends State<PatientManagementScreen> {
                           ),
                           const SizedBox(height: 20),
                           Text(
-                            _isToday ? 'No Patients Yet' : 'No Patients on This Date',
+                            _isToday
+                                ? 'No Patients Yet'
+                                : 'No Patients on This Date',
                             style: AppTheme.heading.copyWith(
                               color: AppTheme.textPrimary,
                             ),
@@ -372,11 +383,21 @@ class _PatientManagementScreenState extends State<PatientManagementScreen> {
                                             const SizedBox(height: 4),
                                             Row(
                                               children: [
-                                                Flexible(child: _buildInfoChip('ID: $id')),
+                                                Flexible(
+                                                  child: _buildInfoChip(
+                                                    'ID: $id',
+                                                  ),
+                                                ),
                                                 const SizedBox(width: 6),
-                                                Flexible(child: _buildInfoChip('Age: $age')),
+                                                Flexible(
+                                                  child: _buildInfoChip(
+                                                    'Age: $age',
+                                                  ),
+                                                ),
                                                 const SizedBox(width: 6),
-                                                Flexible(child: _buildInfoChip(gender)),
+                                                Flexible(
+                                                  child: _buildInfoChip(gender),
+                                                ),
                                               ],
                                             ),
                                             const SizedBox(height: 6),
@@ -455,7 +476,6 @@ class _PatientManagementScreenState extends State<PatientManagementScreen> {
                                                   ),
                                                 ),
                                               ),
-
                                             ],
                                           ),
                                         ],

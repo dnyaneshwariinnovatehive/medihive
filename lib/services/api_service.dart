@@ -227,6 +227,10 @@ static String get baseUrl =>
     required List<Map<String, dynamic>> opdRecords,
     required List<Map<String, dynamic>> appointments,
     List<Map<String, String>> deletedEntities = const [],
+    List<Map<String, dynamic>> calendarNotes = const [],
+    List<Map<String, dynamic>> clinicSettings = const [],
+    List<Map<String, dynamic>> medicines = const [],
+    List<Map<String, dynamic>> symptoms = const [],
   }) async {
     await _loadToken();
     print("BASE URL = $baseUrl");
@@ -238,6 +242,18 @@ static String get baseUrl =>
     };
     if (deletedEntities.isNotEmpty) {
       body['deleted_entities'] = deletedEntities;
+    }
+    if (calendarNotes.isNotEmpty) {
+      body['calendar_notes'] = calendarNotes;
+    }
+    if (clinicSettings.isNotEmpty) {
+      body['clinic_settings'] = clinicSettings;
+    }
+    if (medicines.isNotEmpty) {
+      body['medicines'] = medicines;
+    }
+    if (symptoms.isNotEmpty) {
+      body['symptoms'] = symptoms;
     }
     final res = await http.post(
       Uri.parse('$baseUrl/sync/push'),
@@ -277,6 +293,10 @@ static String get baseUrl =>
     required List<Map<String, dynamic>> opdRecords,
     required List<Map<String, dynamic>> appointments,
     List<Map<String, String>> deletedEntities = const [],
+    List<Map<String, dynamic>> calendarNotes = const [],
+    List<Map<String, dynamic>> clinicSettings = const [],
+    List<Map<String, dynamic>> medicines = const [],
+    List<Map<String, dynamic>> symptoms = const [],
   }) async {
     // LOG: First line inside cloudUpload
     debugPrint('CLOUD_DEBUG: cloudUpload ENTERED deviceId=$deviceId clinicId=$clinicId patients=${patients.length} opd=${opdRecords.length} appts=${appointments.length}');
@@ -292,6 +312,18 @@ static String get baseUrl =>
     };
     if (deletedEntities.isNotEmpty) {
       body['deleted_entities'] = deletedEntities;
+    }
+    if (calendarNotes.isNotEmpty) {
+      body['calendar_notes'] = calendarNotes;
+    }
+    if (clinicSettings.isNotEmpty) {
+      body['clinic_settings'] = clinicSettings;
+    }
+    if (medicines.isNotEmpty) {
+      body['medicines'] = medicines;
+    }
+    if (symptoms.isNotEmpty) {
+      body['symptoms'] = symptoms;
     }
     final url = '$cloudBaseUrl/cloud/upload-changes';
     final encoded = jsonEncode(body);

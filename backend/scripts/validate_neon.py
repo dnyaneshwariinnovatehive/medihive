@@ -129,9 +129,9 @@ def check_schema():
 
     # Verify tables exist
     required_tables = [
-        'patients', 'opd_records', 'appointments', 'users',
-        'fcm_tokens', 'deleted_entities', 'last_sync', 'settings',
-        'clinics', 'device_registry', 'cloud_sync_log',
+        'patients', 'opd_visits', 'users',
+        'calendar_notes', 'clinic_settings', 'medicines',
+        'symptoms_master', 'sync_queue', 'patient_images',
     ]
     try:
         conn = psycopg2.connect(DATABASE_URL, connect_timeout=CONNECT_TIMEOUT)
@@ -167,16 +167,15 @@ def check_query_execution():
 
         # Test write
         cur.execute("""
-            INSERT INTO settings (key, value)
-            VALUES ('neon_validation', 'ok')
-            ON CONFLICT (key) DO UPDATE SET value = 'ok'
+            INSERT INTO clinic_settings (clinic_name)
+            VALUES ('validation_test')
         """)
         print("  ✅ Write: INSERT succeeded")
 
         # Test read
-        cur.execute("SELECT value FROM settings WHERE key = 'neon_validation'")
+        cur.execute("SELECT clinic_name FROM clinic_settings WHERE clinic_name = 'validation_test'")
         result = cur.fetchone()
-        assert result and result[0] == 'ok', "Read returned unexpected value"
+        assert result and result[0] == 'validation_test', "Read returned unexpected value"
         print("  ✅ Read: SELECT succeeded")
 
         # Test prepared statement
